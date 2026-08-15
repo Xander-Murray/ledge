@@ -87,7 +87,6 @@ def apply_transaction_added(
             transactions_by_provider_id=transactions,
             journal_entries=state.journal_entries + (journal_entry,),
             removed_provider_transaction_ids=state.removed_provider_transaction_ids,
-            superseded_by_provider_id=state.superseded_by_provider_id,
         )
 
     if existing_transaction == transaction:
@@ -125,7 +124,6 @@ def apply_transaction_removed(
         removed_provider_transaction_ids=(
             state.removed_provider_transaction_ids | {provider_id}
         ),
-        superseded_by_provider_id=state.superseded_by_provider_id,
     )
 
 
@@ -162,78 +160,6 @@ def apply_transaction_modified(
             replacement_entry,
         ),
         removed_provider_transaction_ids=state.removed_provider_transaction_ids,
-        superseded_by_provider_id=state.superseded_by_provider_id,
-    )
-
-
-def apply_pending_replacement(
-    state: LedgerState,
-    posted_transaction: Transaction,
-    reversal_entry_id: UUID,
-    posted_entry_id: UUID,
-) -> LedgerState:
-    """Replace a pending transaction with its linked posted transaction."""
-    if posted_transaction.pending:
-        raise TransactionStateError("A pending transaction cannot be a replacement")
-
-    pending_id = posted_transaction.pending_transaction_id
-    if pending_id is None:
-        raise TransactionStateError(
-            "A posted replacement must reference a pending transaction"
-        )
-
-    pending_transaction = state.transactions_by_provider_id.get(pending_id)
-    if pending_transaction is None:
-        raise TransactionNotFoundError(
-            f"Pending transaction {pending_id!r} does not exist"
-        )
-    if not pending_transaction.pending:
-        raise TransactionStateError(
-            f"Transaction {pending_id!r} is not pending and cannot be replaced"
-        )
-    if pending_transaction.account_id != posted_transaction.account_id:
-        raise TransactionConflictError(
-            "Pending and posted transactions must belong to the same account"
-        )
-
-    posted_id = posted_transaction.provider_transaction_id
-    existing_replacement_id = state.superseded_by_provider_id.get(pending_id)
-    existing_posted_transaction = state.transactions_by_provider_id.get(posted_id)
-
-    if existing_replacement_id is not None:
-        if (
-            existing_replacement_id == posted_id
-            and existing_posted_transaction == posted_transaction
-        ):
-            return state
-        raise TransactionStateError(
-            f"Pending transaction {pending_id!r} was already superseded"
-        )
-    if existing_posted_transaction is not None:
-        raise TransactionConflictError(
-            f"Posted transaction {posted_id!r} already exists without this replacement"
-        )
-    if reversal_entry_id == posted_entry_id:
-        raise ValueError("Reversal and posted entry IDs must differ")
-
-    new_entries: tuple[JournalEntry, ...] = ()
-    if pending_id not in state.removed_provider_transaction_ids:
-        active_entry = _find_active_journal_entry(state, pending_id)
-        new_entries += (create_reversal_entry(active_entry, reversal_entry_id),)
-    new_entries += (create_journal_entry(posted_transaction, posted_entry_id),)
-
-    transactions = dict(state.transactions_by_provider_id)
-    transactions[posted_id] = posted_transaction
-    superseded_by_provider_id = dict(state.superseded_by_provider_id)
-    superseded_by_provider_id[pending_id] = posted_id
-
-    return LedgerState(
-        transactions_by_provider_id=transactions,
-        journal_entries=state.journal_entries + new_entries,
-        removed_provider_transaction_ids=(
-            state.removed_provider_transaction_ids | {pending_id}
-        ),
-        superseded_by_provider_id=superseded_by_provider_id,
     )
 
 

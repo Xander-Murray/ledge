@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import MappingProxyType
 from uuid import UUID
 
@@ -16,20 +16,11 @@ class Transaction:
     provider_transaction_id: str
     amount_cents: int
     description: str
-    pending: bool = False
-    pending_transaction_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.provider_transaction_id.strip():
             raise ValueError("provider_transaction_id must not be empty")
         _validate_amount_cents(self.amount_cents)
-        if self.pending_transaction_id is not None:
-            if not self.pending_transaction_id.strip():
-                raise ValueError("pending_transaction_id must not be empty")
-            if self.pending_transaction_id == self.provider_transaction_id:
-                raise ValueError("A transaction cannot reference itself as pending")
-        if self.pending and self.pending_transaction_id is not None:
-            raise ValueError("A pending transaction cannot replace another transaction")
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,13 +61,11 @@ class LedgerState:
     transactions_by_provider_id: Mapping[str, Transaction]
     journal_entries: tuple[JournalEntry, ...]
     removed_provider_transaction_ids: frozenset[str] = frozenset()
-    superseded_by_provider_id: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         transactions = dict(self.transactions_by_provider_id)
         journal_entries = tuple(self.journal_entries)
         removed_provider_ids = frozenset(self.removed_provider_transaction_ids)
-        superseded_by_provider_id = dict(self.superseded_by_provider_id)
         for provider_id, transaction in transactions.items():
             if provider_id != transaction.provider_transaction_id:
                 raise ValueError(
@@ -91,21 +80,6 @@ class LedgerState:
             raise ValueError(
                 "Removed transaction IDs must exist in the transaction map"
             )
-        for pending_id, posted_id in superseded_by_provider_id.items():
-            pending_transaction = transactions.get(pending_id)
-            posted_transaction = transactions.get(posted_id)
-            if pending_transaction is None or posted_transaction is None:
-                raise ValueError(
-                    "Superseded transaction relationships must reference known IDs"
-                )
-            if not pending_transaction.pending:
-                raise ValueError("Only pending transactions can be superseded")
-            if posted_transaction.pending:
-                raise ValueError("A pending transaction cannot be a posted replacement")
-            if posted_transaction.pending_transaction_id != pending_id:
-                raise ValueError(
-                    "Posted transaction must reference the pending transaction it replaces"
-                )
 
         object.__setattr__(
             self,
@@ -117,11 +91,6 @@ class LedgerState:
             self,
             "removed_provider_transaction_ids",
             removed_provider_ids,
-        )
-        object.__setattr__(
-            self,
-            "superseded_by_provider_id",
-            MappingProxyType(superseded_by_provider_id),
         )
 
     @classmethod
