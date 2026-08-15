@@ -1,17 +1,11 @@
+from collections.abc import Sequence
+
 from domain.models import Posting, Transaction
 
 
-def verify_integer_cents(object: Posting | object: Transaction) -> None:
-    """Raise an exception if the posting amount is not an interger."""
-    if not isinstance(object.amount_cents, int):
-        raise ValueError("Posting amount must be an integer")
-
 def create_transaction_postings(transaction: Transaction) -> tuple[Posting, ...]:
     """Translate one provider transaction into balanced ledger postings."""
-
-    verify_integer_cents(object.amount_cents)
-
-    return (
+    postings = (
         Posting(
             ledger_account="suspense:unclassified",
             amount_cents=transaction.amount_cents,
@@ -21,14 +15,15 @@ def create_transaction_postings(transaction: Transaction) -> tuple[Posting, ...]
             amount_cents=-transaction.amount_cents,
         ),
     )
+    assert_balanced(postings)
+    return postings
 
 
-def assert_balanced(postings: tuple[Posting, ...]) -> None:
-    """Raise an exception if the postings are not balanced."""
-    if not postings or len(postings) == 1:
-        raise Exception("Not enought postings")
+def assert_balanced(postings: Sequence[Posting]) -> None:
+    """Validate that a double-entry journal has balanced postings."""
+    if len(postings) < 2:
+        raise ValueError("A journal entry requires at least two postings")
 
     total = sum(posting.amount_cents for posting in postings)
-
     if total != 0:
-        raise ValueError("Postings are not balanced")
+        raise ValueError(f"Postings are not balanced: total is {total} cents")
