@@ -59,6 +59,22 @@ def test_transaction_creates_an_initial_journal_entry() -> None:
         amount_cents=1_250,
         description="Neighborhood Market",
     )
+    journal_entry_id = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+
+    entry = create_journal_entry(transaction, journal_entry_id)
+
+    assert entry == JournalEntry(
+        journal_entry_id=journal_entry_id,
+        source_provider_transaction_id="provider-transaction-1",
+        description="Neighborhood Market",
+        postings=(
+            Posting(ledger_account="suspense:unclassified", amount_cents=1_250),
+            Posting(
+                ledger_account="financial:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                amount_cents=-1_250,
+            ),
+        ),
+    )
 
 
 def test_new_transaction_is_added_to_a_new_ledger_state() -> None:
@@ -135,7 +151,9 @@ def test_conflicting_added_transaction_is_rejected() -> None:
             UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"),
         )
 
-    assert state.transactions_by_provider_id[original.provider_transaction_id] == original
+    assert (
+        state.transactions_by_provider_id[original.provider_transaction_id] == original
+    )
     assert len(state.journal_entries) == 1
 
 
@@ -157,22 +175,6 @@ def test_adding_transaction_does_not_mutate_the_input_state() -> None:
     assert result is not initial_state
     assert initial_state.transactions_by_provider_id == {}
     assert initial_state.journal_entries == ()
-    journal_entry_id = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
-
-    entry = create_journal_entry(transaction, journal_entry_id)
-
-    assert entry == JournalEntry(
-        journal_entry_id=journal_entry_id,
-        source_provider_transaction_id="provider-transaction-1",
-        description="Neighborhood Market",
-        postings=(
-            Posting(ledger_account="suspense:unclassified", amount_cents=1_250),
-            Posting(
-                ledger_account="financial:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                amount_cents=-1_250,
-            ),
-        ),
-    )
 
 
 def test_unbalanced_journal_with_more_than_two_postings_is_rejected() -> None:
