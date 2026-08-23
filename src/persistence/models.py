@@ -9,7 +9,9 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Identity,
     MetaData,
+    SmallInteger,
     UniqueConstraint,
     Uuid,
     func,
@@ -148,3 +150,104 @@ class ExternalTransactionModel(Base):
     )
 
     account: Mapped[FinancialAccountModel] = relationship(back_populates="transactions")
+
+    journal_entries: Mapped[list[JournalEntryModel]] = relationship(
+        back_populates="external_transaction"
+    )
+
+
+class JournalEntryModel(Base):
+    """An immutable accounting event for one external transaction."""
+
+    __tablename__ = "journal_entries"
+
+    __table_args__ = (
+        CheckConstraint(
+            "reversal_of_entry_id IS NULL OR reversal_of_entry_id <> id",
+            name="not_self_reversal",
+        ),
+        UniqueConstraint(
+            "id",
+            "external_transaction_id",
+            name="uq_journal_entries_identity",
+        ),
+        ForeignKeyConstraint(
+            ["reversal_of_entry_id", "external_transaction_id"],
+            ["journal_entries.id", "journal_entries.external_transaction_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "reversal_of_entry_id",
+            name="uq_journal_entries_reversal",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+
+    description: Mapped[str] = mapped_column(nullable=False)
+
+    external_transaction_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("external_transactions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+
+    reversal_of_entry_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    sealed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    external_transaction: Mapped[ExternalTransactionModel] = relationship(
+        back_populates="journal_entries"
+    )
+
+    postings: Mapped[list[PostingModel]] = relationship(back_populates="journal_entry")
+
+
+class PostingModel(Base):
+    """One ordered debit or credit line in a journal entry."""
+
+    __tablename__ = "postings"
+
+    __table_args__ = (
+        CheckConstraint(
+            "line_number >= 0",
+            name="line_number_nonnegative",
+        ),
+        CheckConstraint(
+            "length(trim(ledger_account)) > 0",
+            name="ledger_account_nonempty",
+        ),
+        UniqueConstraint(
+            "journal_entry_id",
+            "line_number",
+            name="uq_postings_journal_line",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+
+    journal_entry_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("journal_entries.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+
+    line_number: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+
+    ledger_account: Mapped[str] = mapped_column(nullable=False)
+
+    amount_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    journal_entry: Mapped[JournalEntryModel] = relationship(back_populates="postings")
