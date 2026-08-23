@@ -25,7 +25,7 @@ def _get_test_database_url() -> str:
 
 
 @pytest.mark.integration
-def test_identity_migration_upgrades_and_downgrades(
+def test_migrations_upgrade_and_downgrade(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database_url = _get_test_database_url()
@@ -39,6 +39,7 @@ def test_identity_migration_upgrades_and_downgrades(
 
         assert set(inspect(engine).get_table_names()) == {
             "alembic_version",
+            "external_transactions",
             "financial_accounts",
             "users",
         }

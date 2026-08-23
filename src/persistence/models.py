@@ -4,10 +4,13 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     MetaData,
+    UniqueConstraint,
     Uuid,
     func,
 )
@@ -58,6 +61,11 @@ class FinancialAccountModel(Base):
             "length(trim(name)) > 0",
             name="name_nonempty",
         ),
+        UniqueConstraint(
+            "id",
+            "user_id",
+            name="uq_financial_accounts_ownership",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
@@ -80,3 +88,63 @@ class FinancialAccountModel(Base):
     )
 
     user: Mapped[UserModel] = relationship(back_populates="accounts")
+
+    transactions: Mapped[list[ExternalTransactionModel]] = relationship(
+        back_populates="account"
+    )
+
+
+class ExternalTransactionModel(Base):
+    """The latest known state of one provider transaction."""
+
+    __tablename__ = "external_transactions"
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(provider_transaction_id)) > 0",
+            name="provider_id_nonempty",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'removed')",
+            name="status",
+        ),
+        ForeignKeyConstraint(
+            ["financial_account_id", "user_id"],
+            ["financial_accounts.id", "financial_accounts.user_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "user_id",
+            "provider_transaction_id",
+            name="uq_external_transactions_provider_identity",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+
+    user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+
+    financial_account_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+
+    provider_transaction_id: Mapped[str] = mapped_column(nullable=False)
+
+    amount_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    description: Mapped[str] = mapped_column(nullable=False)
+
+    status: Mapped[str] = mapped_column(nullable=False, server_default="active")
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    account: Mapped[FinancialAccountModel] = relationship(back_populates="transactions")

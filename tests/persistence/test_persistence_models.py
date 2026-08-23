@@ -6,7 +6,7 @@ from persistence.models import Base, FinancialAccountModel, UserModel
 
 
 def test_identity_tables_are_registered_with_uuid_primary_keys() -> None:
-    assert set(Base.metadata.tables) == {"users", "financial_accounts"}
+    assert {"users", "financial_accounts"} <= set(Base.metadata.tables)
     assert tuple(UserModel.__table__.primary_key.columns) == (UserModel.__table__.c.id,)
     assert tuple(FinancialAccountModel.__table__.primary_key.columns) == (
         FinancialAccountModel.__table__.c.id,
