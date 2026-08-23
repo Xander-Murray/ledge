@@ -10,3 +10,4 @@ htmlcov/
 .env
 .idea/
 .vscode/
+database-diagram.md

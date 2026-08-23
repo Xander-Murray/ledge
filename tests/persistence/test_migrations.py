@@ -41,6 +41,8 @@ def test_migrations_upgrade_and_downgrade(
             "alembic_version",
             "external_transactions",
             "financial_accounts",
+            "journal_entries",
+            "postings",
             "users",
         }
         command.check(config)
