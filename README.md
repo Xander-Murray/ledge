@@ -20,7 +20,9 @@ visible and give it a concrete consumer use case.
 
 ## Project status
 
-Ledge currently has a working, pure-Python in-memory domain layer.
+Ledge currently has a tested pure-Python domain layer and a reproducible
+PostgreSQL persistence schema. The next checkpoint is the repository code that
+will execute domain transitions against that schema atomically.
 
 Implemented now:
 
@@ -33,17 +35,27 @@ Implemented now:
 - Transaction removal through reversal without erasing audit history
 - Explicit conflict, missing-transaction, and invalid-state errors
 - Unit, lifecycle, and complete feed-scenario tests
+- Docker Compose PostgreSQL development and test databases
+- SQLAlchemy mappings for users, financial accounts, external transactions,
+  journal entries, and postings
+- Four Alembic migrations that build and remove the complete current schema
+- Database-enforced journal sealing, minimum posting count, zero balance, and
+  immutability after sealing
+- Real PostgreSQL integration coverage for connection, migration round trips,
+  schema drift, journal validation, and mutation rejection
+- A verified checkpoint of 59 passing tests with clean Ruff lint and formatting
 
 Not implemented yet:
 
-- PostgreSQL persistence, SQLAlchemy models, or Alembic migrations
+- A repository that persists domain transitions and rolls them back atomically
 - Transaction versions, provider events, sync pages, or cursors
 - Pending-to-posted replacement
 - FastAPI, authentication, Plaid, or a dashboard
 - S3, SQS, Lambda, EC2, a dead-letter queue, or CloudWatch telemetry
 
-This boundary is intentional. The financial rules are tested before database,
-provider, network, or cloud behavior is introduced.
+This boundary is intentional. The financial rules and durable database
+guarantees are established before provider, network, or cloud behavior is
+introduced.
 
 ## What Ledge is building
 
@@ -252,7 +264,9 @@ These are the long-term invariants Ledge is designed around:
 10. Raw provider events are retained for debugging and controlled replay.
 
 The pure domain currently proves the first, second, fourth, and eighth rules and
-basic duplicate behavior. Persistence and provider phases will enforce the rest.
+basic duplicate behavior. PostgreSQL independently enforces balanced, sealed,
+immutable journal history. Repository and provider phases will enforce atomic
+transition, version, cursor, and delivery guarantees.
 
 See `docs/invariants.md` for additional detail.
 
@@ -267,13 +281,20 @@ Test or future provider adapter
               v
      Pure state transition
               |
-              +--> current transaction mapping
-              +--> immutable journal entry
-              +--> balanced postings
-              +--> removed transaction markers
-              |
               v
         New LedgerState
+
+PostgreSQL 16
+  users -> financial_accounts -> external_transactions
+                                      |
+                                      v
+                                journal_entries
+                                      |
+                                      v
+                                   postings
+
+Alembic installs the schema, constraints, and sealing triggers.
+The repository connecting these two halves is the next checkpoint.
 ```
 
 The domain has no imports from a web framework, ORM, cloud SDK, or provider SDK.
@@ -324,7 +345,7 @@ service exists, how it fails, and how correctness survives retries.
 
 ## How persistence changes the design
 
-The current in-memory collections will map approximately to database tables:
+The current in-memory concepts map to the implemented database tables as follows:
 
 ```text
 transactions_by_provider_id     -> external_transactions
@@ -335,7 +356,21 @@ future applied versions/events  -> transaction_versions / inbound_events
 future cursor                   -> sync_state
 ```
 
-Applying one change will eventually become:
+Journal entries use a draft-and-seal lifecycle:
+
+```text
+Create unsealed journal entry
+-> insert at least two postings
+-> set sealed_at
+-> PostgreSQL verifies the postings sum to zero
+-> PostgreSQL rejects later journal or posting mutations
+```
+
+The domain validates journal balance before persistence. PostgreSQL repeats this
+critical validation as the final durable-data boundary, including when a future
+bug or alternate writer bypasses the normal Python path.
+
+Applying one change through the next repository layer will become:
 
 ```text
 Begin database transaction
@@ -350,12 +385,13 @@ Begin database transaction
 If any step fails, PostgreSQL rolls back the entire operation. The cursor must not
 advance while transaction effects are missing.
 
-The planned persistence stack is:
+The implemented persistence stack is:
 
 - **PostgreSQL:** Durable relational storage and transaction guarantees
 - **SQLAlchemy:** Python persistence mapping and database operations
 - **Alembic:** Versioned schema migrations for clean creation and upgrades
-- **pytest fixtures:** Isolated integration tests and injected rollback failures
+- **pytest fixtures:** Real PostgreSQL integration and migration tests; injected
+  repository rollback failures are the next checkpoint
 
 Pure domain functions remain. Persistence code will be added around them.
 
@@ -436,27 +472,32 @@ docs/lifecycles.md                Transaction lifecycle examples
 src/domain/models.py              Transaction, Posting, JournalEntry, LedgerState
 src/domain/invariants.py          Shared balance validation
 src/domain/ledger.py              Journal factories and state transitions
-src/persistence/database.py       Guided engine and session-factory checkpoint
+src/persistence/database.py       Engine and session-factory configuration
+src/persistence/models.py         SQLAlchemy persistence mappings
+migrations/versions/              Ordered PostgreSQL schema and trigger changes
 tests/domain/test_ledger.py       Posting, journal, and addition behavior
 tests/domain/test_models.py       Model invariants and immutable state
 tests/domain/test_reversals.py    Reversal behavior
 tests/domain/test_transitions.py  Modified and removed lifecycles
-tests/persistence/                Database configuration and connection tests
+tests/persistence/                Model, migration, connection, and trigger tests
 tests/scenarios/                  End-to-end in-memory feed scenarios
 ```
 
 ## Known limitations
 
-The current domain is a deliberately bounded checkpoint:
+The current project is a deliberately bounded persistence checkpoint:
 
-- State disappears when the Python process exits.
-- There is no database transaction or concurrent-worker protection.
+- PostgreSQL can store the state, but no repository writes domain transitions to
+  it yet.
+- Journal writes are protected during sealing, but complete added, modified, and
+  removed workflows do not yet share repository-managed transactions.
 - The same provider ID with different data is detectable, but Ledge cannot yet
   determine whether that data is newer or stale.
 - There is no provider event ID, transaction version, sync cursor, or page state.
 - Pending-to-posted replacement is documented but intentionally deferred.
 - `suspense:unclassified` is a neutral offset, not a categorization system.
-- There is one currency convention and no multi-user ownership model yet.
+- There is one currency convention. User/account ownership exists in the schema,
+  but authentication and user-scoped query services do not.
 - There is no API, authentication, webhook verification, or secret storage.
 
 The most important current limitation is event ordering. If Ledge stores version
@@ -466,7 +507,7 @@ identity and cursor processing must distinguish duplicate, newer, and stale data
 
 ## Roadmap
 
-### 1. Pure in-memory ledger - current checkpoint
+### 1. Pure in-memory ledger - complete
 
 - Balanced postings
 - Immutable journal history
@@ -474,16 +515,18 @@ identity and cursor processing must distinguish duplicate, newer, and stale data
 - Duplicate-safe repeated delivery
 - Complete feed-scenario verification
 
-### 2. PostgreSQL persistence
+### 2. PostgreSQL persistence - in progress
 
-- SQLAlchemy persistence models
-- Alembic schema migrations
-- Journal and posting tables
-- Current external-transaction projection
-- Unique provider identities and versions
-- Atomic transition commits
-- Database-enforced balance and immutability where practical
-- Injected failure and rollback tests
+- [x] SQLAlchemy persistence models
+- [x] Alembic schema migrations
+- [x] Journal and posting tables
+- [x] Current external-transaction projection
+- [x] Unique provider transaction identities within a user
+- [x] Database-enforced journal balance and immutability
+- [ ] Repository translation between domain and persistence models
+- [ ] Atomic added, modified, and removed transition commits
+- [ ] Provider transaction versions and stale-update protection
+- [ ] Injected failure and rollback tests
 
 ### 3. Fake provider synchronization
 
@@ -596,6 +639,7 @@ they have been measured and the test setup is documented.
 - `docs/invariants.md` - correctness requirements and sign conventions
 - `docs/lifecycles.md` - modification, removal, and future pending lifecycles
 
-The immediate next phase is PostgreSQL persistence. Do not add FastAPI, Plaid, or
-AWS until the database can persist the current lifecycle atomically and tests can
-prove rollback leaves no partial ledger state.
+The immediate next phase is completing PostgreSQL persistence through the
+repository layer. Do not add FastAPI, Plaid, or AWS until the database can persist
+the current lifecycle atomically and tests prove rollback leaves no partial
+ledger state.
