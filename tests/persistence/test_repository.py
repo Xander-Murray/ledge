@@ -9,15 +9,17 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, create_engine, select
+from sqlalchemy import Engine, create_engine, func, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, selectinload
 
+from domain.ledger import TransactionConflictError
 from domain.models import Transaction
 from persistence.models import (
     ExternalTransactionModel,
     FinancialAccountModel,
     JournalEntryModel,
+    PostingModel,
     UserModel,
 )
 from persistence.repository import LedgerRepository
@@ -143,3 +145,80 @@ def test_add_transaction_persists_one_complete_sealed_journal(
                 -1_250,
             ),
         ]
+
+
+@pytest.mark.integration
+def test_identical_duplicate_returns_existing_transaction_without_new_rows(
+    repository_database: RepositoryDatabase,
+) -> None:
+    transaction = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="provider-transaction-1",
+        amount_cents=1_250,
+        description="Neighborhood Market",
+    )
+
+    with Session(repository_database.engine) as session, session.begin():
+        original_id = LedgerRepository(session).add_transaction(
+            user_id=repository_database.user_id,
+            transaction=transaction,
+        )
+
+    with Session(repository_database.engine) as session, session.begin():
+        duplicate_id = LedgerRepository(session).add_transaction(
+            user_id=repository_database.user_id,
+            transaction=transaction,
+        )
+
+    assert duplicate_id == original_id
+    with Session(repository_database.engine) as session:
+        assert session.scalar(select(func.count(ExternalTransactionModel.id))) == 1
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 1
+        assert session.scalar(select(func.count(PostingModel.id))) == 2
+
+
+@pytest.mark.integration
+def test_conflicting_duplicate_is_rejected_without_changing_persisted_rows(
+    repository_database: RepositoryDatabase,
+) -> None:
+    original = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="provider-transaction-1",
+        amount_cents=1_250,
+        description="Neighborhood Market",
+    )
+    conflicting = Transaction(
+        account_id=original.account_id,
+        provider_transaction_id=original.provider_transaction_id,
+        amount_cents=1_400,
+        description=original.description,
+    )
+
+    with Session(repository_database.engine) as session, session.begin():
+        original_id = LedgerRepository(session).add_transaction(
+            user_id=repository_database.user_id,
+            transaction=original,
+        )
+
+    with (
+        pytest.raises(
+            TransactionConflictError,
+            match="already exists with different data",
+        ),
+        Session(repository_database.engine) as session,
+        session.begin(),
+    ):
+        LedgerRepository(session).add_transaction(
+            user_id=repository_database.user_id,
+            transaction=conflicting,
+        )
+
+    with Session(repository_database.engine) as session:
+        persisted_transaction = session.get(ExternalTransactionModel, original_id)
+
+        assert persisted_transaction is not None
+        assert persisted_transaction.amount_cents == original.amount_cents
+        assert persisted_transaction.description == original.description
+        assert session.scalar(select(func.count(ExternalTransactionModel.id))) == 1
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 1
+        assert session.scalar(select(func.count(PostingModel.id))) == 2
