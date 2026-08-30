@@ -264,3 +264,100 @@ def test_add_transaction_rolls_back_when_sealing_fails(
         assert session.scalar(select(func.count(ExternalTransactionModel.id))) == 0
         assert session.scalar(select(func.count(JournalEntryModel.id))) == 0
         assert session.scalar(select(func.count(PostingModel.id))) == 0
+
+
+@pytest.mark.integration
+def test_modify_transaction_appends_reversal_and_replacement_journals(
+    repository_database: RepositoryDatabase,
+) -> None:
+    original = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="provider-transaction-1",
+        amount_cents=1_250,
+        description="Neighborhood Market",
+    )
+    modified = Transaction(
+        account_id=original.account_id,
+        provider_transaction_id=original.provider_transaction_id,
+        amount_cents=1_400,
+        description="Neighborhood Market with tip",
+    )
+
+    with Session(repository_database.engine) as session, session.begin():
+        external_transaction_id = LedgerRepository(session).add_transaction(
+            user_id=repository_database.user_id,
+            transaction=original,
+        )
+
+    with Session(repository_database.engine) as session, session.begin():
+        modified_transaction_id = LedgerRepository(session).modify_transaction(
+            user_id=repository_database.user_id,
+            transaction=modified,
+        )
+
+    assert modified_transaction_id == external_transaction_id
+    with Session(repository_database.engine) as session:
+        persisted_transaction = session.scalar(
+            select(ExternalTransactionModel)
+            .where(ExternalTransactionModel.id == external_transaction_id)
+            .options(
+                selectinload(ExternalTransactionModel.journal_entries).selectinload(
+                    JournalEntryModel.postings
+                )
+            )
+        )
+
+        assert persisted_transaction is not None
+        assert persisted_transaction.amount_cents == modified.amount_cents
+        assert persisted_transaction.description == modified.description
+        assert len(persisted_transaction.journal_entries) == 3
+
+        reversal = next(
+            entry
+            for entry in persisted_transaction.journal_entries
+            if entry.reversal_of_entry_id is not None
+        )
+        original_journal = next(
+            entry
+            for entry in persisted_transaction.journal_entries
+            if entry.id == reversal.reversal_of_entry_id
+        )
+        replacement = next(
+            entry
+            for entry in persisted_transaction.journal_entries
+            if entry.reversal_of_entry_id is None and entry.id != original_journal.id
+        )
+
+        assert all(
+            entry.sealed_at is not None
+            for entry in persisted_transaction.journal_entries
+        )
+        assert reversal.description == f"Reversal of {original.description}"
+        assert replacement.description == modified.description
+
+        original_postings = sorted(
+            original_journal.postings,
+            key=lambda posting: posting.line_number,
+        )
+        reversal_postings = sorted(
+            reversal.postings,
+            key=lambda posting: posting.line_number,
+        )
+        replacement_postings = sorted(
+            replacement.postings,
+            key=lambda posting: posting.line_number,
+        )
+
+        assert [posting.amount_cents for posting in original_postings] == [
+            1_250,
+            -1_250,
+        ]
+        assert [posting.amount_cents for posting in reversal_postings] == [
+            -1_250,
+            1_250,
+        ]
+        assert [posting.amount_cents for posting in replacement_postings] == [
+            1_400,
+            -1_400,
+        ]
+        assert session.scalar(select(func.count(PostingModel.id))) == 6
