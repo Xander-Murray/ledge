@@ -21,8 +21,8 @@ visible and give it a concrete consumer use case.
 ## Project status
 
 Ledge currently has a tested pure-Python domain layer and a reproducible
-PostgreSQL persistence schema. The next checkpoint is the repository code that
-will execute domain transitions against that schema atomically.
+PostgreSQL persistence layer. The repository now persists additions and
+modifications atomically; persisted removal is the next lifecycle checkpoint.
 
 Implemented now:
 
@@ -43,11 +43,17 @@ Implemented now:
   immutability after sealing
 - Real PostgreSQL integration coverage for connection, migration round trips,
   schema drift, journal validation, and mutation rejection
-- A verified checkpoint of 59 passing tests with clean Ruff lint and formatting
+- Repository-managed additions with sequential duplicate idempotency and explicit
+  conflicting-payload rejection
+- Repository-managed modifications that append sealed reversal and replacement
+  journals while updating the current external projection
+- Injected failure coverage proving partially flushed additions roll back entirely
+- A verified checkpoint of 64 passing tests with clean Ruff lint and formatting
 
 Not implemented yet:
 
-- A repository that persists domain transitions and rolls them back atomically
+- Persisted removal and its idempotency, conflict, and rollback behavior
+- Complete edge-case and rollback coverage for persisted modifications
 - Transaction versions, provider events, sync pages, or cursors
 - Pending-to-posted replacement
 - FastAPI, authentication, Plaid, or a dashboard
@@ -151,9 +157,9 @@ The transaction mapping answers what the provider currently says. Journal entrie
 answer how Ledge reached that state. Removed IDs remain linked to their original
 transactions so deletion does not erase history.
 
-`LedgerState` is a learning and testing model. PostgreSQL will later become the
-durable state, so production code will query relevant records rather than loading
-one enormous state object.
+`LedgerState` remains a learning and testing model. PostgreSQL is now the durable
+state for repository-managed additions and modifications, so persistence code
+queries the relevant records instead of loading one enormous state object.
 
 ## Current state transitions
 
@@ -273,16 +279,18 @@ See `docs/invariants.md` for additional detail.
 ## Current architecture
 
 ```text
-Test or future provider adapter
-              |
-              v
-         Transaction
-              |
-              v
-     Pure state transition
-              |
-              v
-        New LedgerState
+Domain tests                         Repository integration
+     |                                      |
+     v                                      v
+Pure state transitions                Transaction
+     |                                      |
+     v                                      v
+New LedgerState                 Domain journal factories
+                                            |
+                                            v
+                                    LedgerRepository
+                                            |
+                                            v
 
 PostgreSQL 16
   users -> financial_accounts -> external_transactions
@@ -294,7 +302,8 @@ PostgreSQL 16
                                    postings
 
 Alembic installs the schema, constraints, and sealing triggers.
-The repository connecting these two halves is the next checkpoint.
+`LedgerRepository` currently connects domain journals to PostgreSQL for additions
+and modifications. Persisted removal is the next repository checkpoint.
 ```
 
 The domain has no imports from a web framework, ORM, cloud SDK, or provider SDK.
@@ -370,30 +379,32 @@ The domain validates journal balance before persistence. PostgreSQL repeats this
 critical validation as the final durable-data boundary, including when a future
 bug or alternate writer bypasses the normal Python path.
 
-Applying one change through the next repository layer will become:
+Applying an addition or modification through the current repository now follows:
 
 ```text
 Begin database transaction
--> look up provider transaction identity/version
+-> look up provider transaction identity and current projection
 -> insert or update the current provider projection
 -> insert immutable journal entry or reversal
 -> insert all balanced postings
--> update cursor when processing a sync page
 -> commit everything together
 ```
 
-If any step fails, PostgreSQL rolls back the entire operation. The cursor must not
-advance while transaction effects are missing.
+If any step fails, PostgreSQL rolls back the entire operation. A repository test
+injects failure between draft insertion and sealing and proves that no external
+transaction, journal, or posting rows remain. Cursor updates will join this same
+transaction boundary when synchronization is implemented.
 
 The implemented persistence stack is:
 
 - **PostgreSQL:** Durable relational storage and transaction guarantees
 - **SQLAlchemy:** Python persistence mapping and database operations
 - **Alembic:** Versioned schema migrations for clean creation and upgrades
-- **pytest fixtures:** Real PostgreSQL integration and migration tests; injected
-  repository rollback failures are the next checkpoint
+- **pytest fixtures:** Real PostgreSQL integration, migration, idempotency, and
+  injected rollback tests
 
-Pure domain functions remain. Persistence code will be added around them.
+Pure domain functions remain independent. The repository calls their journal and
+reversal factories, then translates the results into SQLAlchemy models.
 
 ## Development setup
 
@@ -474,12 +485,13 @@ src/domain/invariants.py          Shared balance validation
 src/domain/ledger.py              Journal factories and state transitions
 src/persistence/database.py       Engine and session-factory configuration
 src/persistence/models.py         SQLAlchemy persistence mappings
+src/persistence/repository.py     Atomic addition and modification persistence
 migrations/versions/              Ordered PostgreSQL schema and trigger changes
 tests/domain/test_ledger.py       Posting, journal, and addition behavior
 tests/domain/test_models.py       Model invariants and immutable state
 tests/domain/test_reversals.py    Reversal behavior
 tests/domain/test_transitions.py  Modified and removed lifecycles
-tests/persistence/                Model, migration, connection, and trigger tests
+tests/persistence/                Database, trigger, repository, and rollback tests
 tests/scenarios/                  End-to-end in-memory feed scenarios
 ```
 
@@ -487,10 +499,11 @@ tests/scenarios/                  End-to-end in-memory feed scenarios
 
 The current project is a deliberately bounded persistence checkpoint:
 
-- PostgreSQL can store the state, but no repository writes domain transitions to
-  it yet.
-- Journal writes are protected during sealing, but complete added, modified, and
-  removed workflows do not yet share repository-managed transactions.
+- Additions and modifications persist atomically, but removal does not yet have a
+  repository implementation.
+- Persisted addition has duplicate, conflict, and rollback coverage. Persisted
+  modification currently has its successful reversal-and-replacement path tested;
+  its missing, removed, duplicate, conflict, and rollback cases remain.
 - The same provider ID with different data is detectable, but Ledge cannot yet
   determine whether that data is newer or stale.
 - There is no provider event ID, transaction version, sync cursor, or page state.
@@ -523,10 +536,13 @@ identity and cursor processing must distinguish duplicate, newer, and stale data
 - [x] Current external-transaction projection
 - [x] Unique provider transaction identities within a user
 - [x] Database-enforced journal balance and immutability
-- [ ] Repository translation between domain and persistence models
-- [ ] Atomic added, modified, and removed transition commits
+- [x] Repository translation for additions and modifications
+- [x] Atomic addition and modification commits
+- [x] Sequential duplicate-safe additions and conflict rejection
+- [x] Injected addition failure and complete rollback proof
+- [ ] Persisted removal with duplicate, conflict, and rollback coverage
+- [ ] Complete persisted-modification edge-case and rollback coverage
 - [ ] Provider transaction versions and stale-update protection
-- [ ] Injected failure and rollback tests
 
 ### 3. Fake provider synchronization
 
@@ -639,7 +655,7 @@ they have been measured and the test setup is documented.
 - `docs/invariants.md` - correctness requirements and sign conventions
 - `docs/lifecycles.md` - modification, removal, and future pending lifecycles
 
-The immediate next phase is completing PostgreSQL persistence through the
-repository layer. Do not add FastAPI, Plaid, or AWS until the database can persist
-the current lifecycle atomically and tests prove rollback leaves no partial
-ledger state.
+The immediate next task is persisted removal, followed by repository edge-case and
+rollback coverage for modification and removal. Do not add FastAPI, Plaid, or AWS
+until added, modified, and removed lifecycles all persist atomically and tests
+prove failures leave no partial ledger state.

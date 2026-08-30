@@ -33,7 +33,7 @@ received. Ledger postings are positive for debits and negative for credits.
 For a $10 checking-account purchase:
 
 ```text
-expense:unclassified      +1000  (debit)
+suspense:unclassified     +1000  (debit)
 financial:<account id>    -1000  (credit)
                            -----
                                0
@@ -43,11 +43,28 @@ For a $5 refund, the provider amount is `-500`, so both posting signs reverse.
 The same purchase convention works for a credit card: the financial posting
 credits the card liability while the expense is debited.
 
-## How these will be enforced
+## Current enforcement
 
-- Domain value objects will reject non-integer amounts and invalid versions.
-- `assert_balanced` will reject an invalid posting set before persistence.
-- Later, database constraints will guard against duplicate versions and invalid
-  mutations even if application validation is bypassed.
-- Application operations will avoid committing internally so a future sync-page
-  transaction can roll back as one unit.
+- Domain value objects reject non-integer amounts, and `assert_balanced` rejects
+  fewer than two postings or a nonzero total before persistence.
+- PostgreSQL sealing triggers independently require at least two postings and a
+  zero total, then prevent updates or deletes of sealed journals and their lines.
+- Reversal constraints prevent self-reversal, cross-transaction reversal, and
+  reversing the same journal more than once.
+- `(user_id, provider_transaction_id)` uniquely identifies the current external
+  transaction projection. The repository treats identical sequential additions
+  as no-ops and rejects conflicting additions.
+- Repository methods flush but do not commit. The caller owns the transaction,
+  and injected-failure coverage proves a partially flushed addition rolls back
+  without leaving transaction, journal, or posting rows.
+- Persisted modification locks the current projection, requires exactly one
+  active journal, and atomically appends a reversal and replacement.
+
+## Planned enforcement
+
+- Provider event IDs and transaction versions will distinguish duplicate, newer,
+  and stale updates; version-aware idempotency is not implemented yet.
+- A sync page and its cursor update will share one database transaction.
+- Persisted removal will reverse the active effect and retain audit history.
+- Authentication and user-scoped query services will enforce ownership at the API
+  boundary; the relational schema already enforces user/account ownership.

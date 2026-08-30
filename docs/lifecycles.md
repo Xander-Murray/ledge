@@ -1,15 +1,20 @@
 # Transaction lifecycles
 
-These examples describe behavior to implement and test during Phase 1.
+These examples describe current and planned lifecycle behavior. The pure domain
+supports addition, modification, and removal. PostgreSQL persistence currently
+supports addition and modification; persisted removal and provider versions are
+still planned.
 
 ## Pending purchase becomes posted
 
+**Status:** Planned after the base provider synchronization pipeline.
+
 ```text
 pending `pending-1` v1 added for 2,000 cents
-  -> purchase journal: expense +2000 / financial account -2000
+  -> purchase journal: suspense +2000 / financial account -2000
 posted `posted-1` v1 arrives with pending_transaction_id=`pending-1`
-  -> reversal linked to pending purchase: expense -2000 / account +2000
-  -> posted journal: expense +2000 / account -2000
+  -> reversal linked to pending purchase: suspense -2000 / account +2000
+  -> posted journal: suspense +2000 / account -2000
   -> pending transaction marked replaced by `posted-1`
 ```
 
@@ -18,23 +23,37 @@ $20 purchase.
 
 ## Posted amount changes
 
+**Status:** Implemented in the pure domain and PostgreSQL repository. The `v1` and
+`v2` labels below explain the desired provider history; explicit version storage
+and stale-version rejection are not implemented yet.
+
 ```text
 `txn-1` v1 added for 1,000 cents
-  -> original journal: expense +1000 / account -1000
+  -> original journal: suspense +1000 / account -1000
 `txn-1` v2 modifies amount to 1,200 cents
-  -> reversal of v1: expense -1000 / account +1000
-  -> replacement for v2: expense +1200 / account -1200
+  -> reversal of v1: suspense -1000 / account +1000
+  -> replacement for v2: suspense +1200 / account -1200
 ```
 
-The net effect is $12, and both provider versions remain inspectable.
+The net effect is $12, and both accounting states remain inspectable through
+journal history. Explicit provider-version records are still planned.
+
+The persisted workflow locks the current external projection, identifies exactly
+one active journal, reconstructs it as a domain value, creates a linked reversal
+and balanced replacement, updates the projection, flushes both drafts, and seals
+them in the caller's database transaction. The original journal remains sealed
+and unchanged.
 
 ## Posted transaction is removed
 
+**Status:** Implemented in the pure domain; PostgreSQL repository support is the
+next persistence checkpoint.
+
 ```text
 `txn-1` v1 added for 1,000 cents
-  -> original journal: expense +1000 / account -1000
+  -> original journal: suspense +1000 / account -1000
 `txn-1` v2 removed
-  -> reversal of active effect: expense -1000 / account +1000
+  -> reversal of active effect: suspense -1000 / account +1000
   -> current transaction marked removed
 ```
 
@@ -44,16 +63,21 @@ No history is deleted. Re-delivering removal v2 creates nothing new.
 
 ### Failure after the first change in a sync page
 
-The page transaction rolls back, including journal rows, transaction versions,
-and cursor state. A retry begins from the old cursor and reapplies the page.
+**Status:** Repository rollback is proven for one addition; page and cursor state
+remain planned. The future page transaction will roll back journal rows,
+transaction versions, and cursor state together. A retry will begin from the old
+cursor and reapply the page.
 
 ### Duplicate delivery
 
-Event-level idempotency should stop redundant work when possible. Unique
-transaction-version identities provide a second boundary that prevents duplicate
-journal effects if both deliveries reach the ledger.
+**Status:** Sequential duplicate additions are implemented. An identical payload
+returns the existing external transaction ID without another journal; conflicting
+data is rejected. Concurrent missing-row races and event/version identities remain
+future boundaries, with the database uniqueness constraint providing final
+provider-identity protection today.
 
 ### Invalid unbalanced journal
 
-Domain validation rejects it before persistence. Later, PostgreSQL should also
-reject it if application validation is bypassed. No partial journal remains.
+Domain validation rejects it before persistence. PostgreSQL also rejects sealing
+when fewer than two postings exist or their sum is nonzero, then prevents changes
+to sealed journal history. No partial journal remains after transaction rollback.

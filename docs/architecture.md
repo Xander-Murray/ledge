@@ -18,12 +18,13 @@ The first milestone focuses on domain models, ledger operations, PostgreSQL
 persistence, migrations, and automated tests. Provider payloads will be translated
 into Ledge's own domain types at the boundary.
 
-## Non-goals
+## Current checkpoint non-goals
 
 - Real bank credentials or production provider access
 - Payments, transfers, or any money movement
 - Investments, multiple currencies, or machine-learning predictions
-- Cloud infrastructure, independently deployed microservices, or a mobile app
+- Cloud deployment or independently deployed services during Phase 1
+- A native mobile application
 - Complex budgeting and social features
 
 ## Target architecture
@@ -47,7 +48,7 @@ PostgreSQL ledger and read models
 FastAPI queries ----> React dashboard
 ```
 
-## Phase 1 path
+## Current Phase 1 path
 
 ```text
 Transaction value
@@ -59,17 +60,40 @@ pure ledger functions
 balanced postings
         |
         v
-SQLAlchemy persistence (later in Phase 1)
+LedgerRepository
         |
         v
-PostgreSQL constraints and migrations (later in Phase 1)
+SQLAlchemy models
+        |
+        v
+PostgreSQL constraints, triggers, and migrations
 ```
 
 Starting with pure functions keeps accounting rules easy to understand and test.
-Database setup comes after those rules work locally; Plaid, AWS, FastAPI, and
-React come in later phases.
+The implemented repository persists additions and modifications without making
+the domain depend on SQLAlchemy. It keeps the current provider projection in
+`external_transactions` and appends balanced, sealed history to
+`journal_entries` and `postings`. Persisted removal remains the next Phase 1
+operation; Plaid, AWS, FastAPI, and React remain later phases.
 
-## Future transaction boundary
+## Current transaction boundary
+
+The caller opens a SQLAlchemy transaction and passes its session to the
+repository. Repository methods may `flush()` SQL so PostgreSQL constraints and
+triggers run, but they do not commit. A successful addition or modification is
+committed by the caller; an exception rolls back its projection, journals, and
+postings together.
+
+Addition is sequentially idempotent by `(user_id, provider_transaction_id)`.
+Identical redelivery returns the existing Ledge UUID without new journal effects;
+different data on the added path raises a domain conflict. Modification locks the
+current projection, reconstructs its one active journal, appends a reversal and
+replacement, updates the projection, and seals both new journals atomically.
+
+An integration test injects failure after draft rows have been flushed but before
+sealing and verifies that PostgreSQL retains none of those partial rows.
+
+## Future sync-page boundary
 
 A sync page will eventually open one database transaction, apply every change,
 store the next cursor, and commit once. Any exception will roll back the entire
