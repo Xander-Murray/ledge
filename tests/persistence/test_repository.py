@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -32,6 +33,10 @@ class RepositoryDatabase:
     engine: Engine
     user_id: UUID
     financial_account_id: UUID
+
+
+class InjectedPersistenceFailure(RuntimeError):
+    """Failure raised by a test between repository flushes."""
 
 
 def _get_test_database_url() -> str:
@@ -222,3 +227,40 @@ def test_conflicting_duplicate_is_rejected_without_changing_persisted_rows(
         assert session.scalar(select(func.count(ExternalTransactionModel.id))) == 1
         assert session.scalar(select(func.count(JournalEntryModel.id))) == 1
         assert session.scalar(select(func.count(PostingModel.id))) == 2
+
+
+@pytest.mark.integration
+def test_add_transaction_rolls_back_when_sealing_fails(
+    repository_database: RepositoryDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transaction = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="provider-transaction-1",
+        amount_cents=1_250,
+        description="Neighborhood Market",
+    )
+
+    with Session(repository_database.engine) as session:
+        real_flush = session.flush
+        flush_calls = 0
+
+        def fail_on_second_flush(objects: Sequence[Any] | None = None) -> None:
+            nonlocal flush_calls
+            flush_calls += 1
+            if flush_calls == 2:
+                raise InjectedPersistenceFailure("journal sealing failed")
+            real_flush(objects)
+
+        monkeypatch.setattr(session, "flush", fail_on_second_flush)
+
+        with pytest.raises(InjectedPersistenceFailure), session.begin():
+            LedgerRepository(session).add_transaction(
+                user_id=repository_database.user_id,
+                transaction=transaction,
+            )
+
+    with Session(repository_database.engine) as session:
+        assert session.scalar(select(func.count(ExternalTransactionModel.id))) == 0
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 0
+        assert session.scalar(select(func.count(PostingModel.id))) == 0
