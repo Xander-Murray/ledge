@@ -70,28 +70,31 @@ PostgreSQL constraints, triggers, and migrations
 ```
 
 Starting with pure functions keeps accounting rules easy to understand and test.
-The implemented repository persists additions and modifications without making
-the domain depend on SQLAlchemy. It keeps the current provider projection in
-`external_transactions` and appends balanced, sealed history to
-`journal_entries` and `postings`. Persisted removal remains the next Phase 1
-operation; Plaid, AWS, FastAPI, and React remain later phases.
+The implemented repository persists additions, modifications, and removals
+without making the domain depend on SQLAlchemy. It keeps the current provider
+projection in `external_transactions` and appends balanced, sealed history to
+`journal_entries` and `postings`. Plaid, AWS, FastAPI, and React remain later
+phases.
 
 ## Current transaction boundary
 
 The caller opens a SQLAlchemy transaction and passes its session to the
 repository. Repository methods may `flush()` SQL so PostgreSQL constraints and
-triggers run, but they do not commit. A successful addition or modification is
-committed by the caller; an exception rolls back its projection, journals, and
-postings together.
+triggers run, but they do not commit. A successful addition, modification, or
+removal is committed by the caller; an exception rolls back its projection,
+journals, and postings together.
 
 Addition is sequentially idempotent by `(user_id, provider_transaction_id)`.
 Identical redelivery returns the existing Ledge UUID without new journal effects;
 different data on the added path raises a domain conflict. Modification locks the
 current projection, reconstructs its one active journal, appends a reversal and
 replacement, updates the projection, and seals both new journals atomically.
+Removal uses the same locked active-journal lookup, appends its reversal, and
+marks the projection removed. An identical repeated removal is a no-op.
 
-An integration test injects failure after draft rows have been flushed but before
-sealing and verifies that PostgreSQL retains none of those partial rows.
+Integration tests inject failure after draft rows have been flushed but before
+sealing. They verify that additions leave no partial rows and removals retain the
+original active projection without a partial reversal.
 
 ## Future sync-page boundary
 

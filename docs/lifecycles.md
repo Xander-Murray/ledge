@@ -2,8 +2,7 @@
 
 These examples describe current and planned lifecycle behavior. The pure domain
 supports addition, modification, and removal. PostgreSQL persistence currently
-supports addition and modification; persisted removal and provider versions are
-still planned.
+supports all three; provider versions are still planned.
 
 ## Pending purchase becomes posted
 
@@ -46,8 +45,7 @@ and unchanged.
 
 ## Posted transaction is removed
 
-**Status:** Implemented in the pure domain; PostgreSQL repository support is the
-next persistence checkpoint.
+**Status:** Implemented in the pure domain and PostgreSQL repository.
 
 ```text
 `txn-1` v1 added for 1,000 cents
@@ -59,22 +57,28 @@ next persistence checkpoint.
 
 No history is deleted. Re-delivering removal v2 creates nothing new.
 
+The persisted workflow locks the projection, verifies that the removal payload
+matches its latest known data, finds exactly one active journal, appends and seals
+its linked reversal, and marks the projection removed in one database transaction.
+This also works after modification: removal reverses the replacement journal, not
+the obsolete original journal.
+
 ## Failure and recovery scenarios
 
 ### Failure after the first change in a sync page
 
-**Status:** Repository rollback is proven for one addition; page and cursor state
-remain planned. The future page transaction will roll back journal rows,
+**Status:** Repository rollback is proven for addition and removal; page and cursor
+state remain planned. The future page transaction will roll back journal rows,
 transaction versions, and cursor state together. A retry will begin from the old
 cursor and reapply the page.
 
 ### Duplicate delivery
 
-**Status:** Sequential duplicate additions are implemented. An identical payload
-returns the existing external transaction ID without another journal; conflicting
-data is rejected. Concurrent missing-row races and event/version identities remain
-future boundaries, with the database uniqueness constraint providing final
-provider-identity protection today.
+**Status:** Sequential duplicate additions and removals are implemented. An
+identical payload returns the existing external transaction ID without another
+journal; conflicting data is rejected. Concurrent missing-row races and
+event/version identities remain future boundaries, with the database uniqueness
+constraint providing final provider-identity protection today.
 
 ### Invalid unbalanced journal
 

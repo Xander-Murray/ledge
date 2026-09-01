@@ -102,19 +102,9 @@ class LedgerRepository:
         The caller owns the surrounding transaction and decides whether to commit
         or roll back. Return the existing Ledge-owned external transaction ID.
         """
-        existing = self._session.scalar(
-            select(ExternalTransactionModel)
-            .where(
-                ExternalTransactionModel.user_id == user_id,
-                ExternalTransactionModel.provider_transaction_id
-                == transaction.provider_transaction_id,
-            )
-            .options(
-                selectinload(ExternalTransactionModel.journal_entries).selectinload(
-                    JournalEntryModel.postings
-                )
-            )
-            .with_for_update()
+        existing = self._load_transaction_for_update(
+            user_id=user_id,
+            provider_transaction_id=transaction.provider_transaction_id,
         )
 
         if existing is None:
@@ -133,39 +123,7 @@ class LedgerRepository:
         ):
             return existing.id
 
-        reversed_ids = {
-            entry.reversal_of_entry_id
-            for entry in existing.journal_entries
-            if entry.reversal_of_entry_id is not None
-        }
-        active_models = [
-            entry
-            for entry in existing.journal_entries
-            if entry.reversal_of_entry_id is None and entry.id not in reversed_ids
-        ]
-        if len(active_models) != 1:
-            raise TransactionStateError(
-                f"Transaction {transaction.provider_transaction_id!r} "
-                "must have exactly one active journal entry; "
-                f"found {len(active_models)}"
-            )
-        active_model = active_models[0]
-
-        active_domain = JournalEntry(
-            journal_entry_id=active_model.id,
-            source_provider_transaction_id=existing.provider_transaction_id,
-            description=active_model.description,
-            postings=tuple(
-                Posting(
-                    ledger_account=posting.ledger_account,
-                    amount_cents=posting.amount_cents,
-                )
-                for posting in sorted(
-                    active_model.postings, key=lambda posting: posting.line_number
-                )
-            ),
-            reversal_of_entry_id=active_model.reversal_of_entry_id,
-        )
+        active_domain = self._get_active_journal_entry(existing)
         reversal_model = self._stage_journal_entry(
             external_transaction_id=existing.id,
             journal_entry=create_reversal_entry(active_domain, uuid4()),
@@ -186,6 +144,111 @@ class LedgerRepository:
         self._session.flush()
 
         return existing.id
+
+    def remove_transaction(self, *, user_id: UUID, transaction: Transaction) -> UUID:
+        """Stage a projection removal and reversal of its active journal.
+
+        The caller owns the surrounding transaction and decides whether to commit
+        or roll back. Return the existing Ledge-owned external transaction ID.
+        """
+        existing = self._load_transaction_for_update(
+            user_id=user_id,
+            provider_transaction_id=transaction.provider_transaction_id,
+        )
+
+        if existing is None:
+            raise TransactionNotFoundError(
+                f"Transaction {transaction.provider_transaction_id!r} does not exist"
+            )
+        if (
+            existing.financial_account_id != transaction.account_id
+            or existing.amount_cents != transaction.amount_cents
+            or existing.description != transaction.description
+        ):
+            raise TransactionConflictError(
+                f"Transaction {transaction.provider_transaction_id!r} "
+                "removal data differs from current data"
+            )
+        if existing.status == "removed":
+            return existing.id
+        if existing.status != "active":
+            raise TransactionStateError(
+                f"Transaction {transaction.provider_transaction_id!r} "
+                f"cannot be removed from status {existing.status!r}"
+            )
+
+        active_domain = self._get_active_journal_entry(existing)
+        reversal_model = self._stage_journal_entry(
+            external_transaction_id=existing.id,
+            journal_entry=create_reversal_entry(active_domain, uuid4()),
+        )
+
+        existing.status = "removed"
+        self._session.flush()
+
+        reversal_model.sealed_at = datetime.now(UTC)
+        self._session.flush()
+
+        return existing.id
+
+    def _load_transaction_for_update(
+        self,
+        *,
+        user_id: UUID,
+        provider_transaction_id: str,
+    ) -> ExternalTransactionModel | None:
+        return self._session.scalar(
+            select(ExternalTransactionModel)
+            .where(
+                ExternalTransactionModel.user_id == user_id,
+                ExternalTransactionModel.provider_transaction_id
+                == provider_transaction_id,
+            )
+            .options(
+                selectinload(ExternalTransactionModel.journal_entries).selectinload(
+                    JournalEntryModel.postings
+                )
+            )
+            .with_for_update()
+        )
+
+    @staticmethod
+    def _get_active_journal_entry(
+        transaction: ExternalTransactionModel,
+    ) -> JournalEntry:
+        reversed_ids = {
+            entry.reversal_of_entry_id
+            for entry in transaction.journal_entries
+            if entry.reversal_of_entry_id is not None
+        }
+        active_models = [
+            entry
+            for entry in transaction.journal_entries
+            if entry.reversal_of_entry_id is None and entry.id not in reversed_ids
+        ]
+        if len(active_models) != 1:
+            raise TransactionStateError(
+                f"Transaction {transaction.provider_transaction_id!r} "
+                "must have exactly one active journal entry; "
+                f"found {len(active_models)}"
+            )
+
+        active_model = active_models[0]
+        return JournalEntry(
+            journal_entry_id=active_model.id,
+            source_provider_transaction_id=transaction.provider_transaction_id,
+            description=active_model.description,
+            postings=tuple(
+                Posting(
+                    ledger_account=posting.ledger_account,
+                    amount_cents=posting.amount_cents,
+                )
+                for posting in sorted(
+                    active_model.postings, key=lambda posting: posting.line_number
+                )
+            ),
+            reversal_of_entry_id=active_model.reversal_of_entry_id,
+        )
 
     def _stage_journal_entry(
         self,

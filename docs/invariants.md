@@ -59,12 +59,14 @@ credits the card liability while the expense is debited.
   without leaving transaction, journal, or posting rows.
 - Persisted modification locks the current projection, requires exactly one
   active journal, and atomically appends a reversal and replacement.
+- Persisted removal locks the current projection, requires an exact payload match,
+  appends one reversal of the active journal, and atomically marks the projection
+  removed. Identical redelivery creates no new history.
 
 ## Planned enforcement
 
 - Provider event IDs and transaction versions will distinguish duplicate, newer,
   and stale updates; version-aware idempotency is not implemented yet.
 - A sync page and its cursor update will share one database transaction.
-- Persisted removal will reverse the active effect and retain audit history.
 - Authentication and user-scoped query services will enforce ownership at the API
   boundary; the relational schema already enforces user/account ownership.

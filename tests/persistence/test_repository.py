@@ -14,7 +14,7 @@ from sqlalchemy import Engine, create_engine, func, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, selectinload
 
-from domain.ledger import TransactionConflictError
+from domain.ledger import TransactionConflictError, TransactionNotFoundError
 from domain.models import Transaction
 from persistence.models import (
     ExternalTransactionModel,
@@ -361,3 +361,318 @@ def test_modify_transaction_appends_reversal_and_replacement_journals(
             -1_400,
         ]
         assert session.scalar(select(func.count(PostingModel.id))) == 6
+
+
+@pytest.mark.integration
+def test_remove_transaction_appends_reversal_and_marks_projection_removed(
+    repository_database: RepositoryDatabase,
+) -> None:
+    transaction = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="provider-transaction-1",
+        amount_cents=1_250,
+        description="Neighborhood Market",
+    )
+
+    with Session(repository_database.engine) as session, session.begin():
+        external_transaction_id = LedgerRepository(session).add_transaction(
+            user_id=repository_database.user_id,
+            transaction=transaction,
+        )
+
+    with Session(repository_database.engine) as session, session.begin():
+        removed_transaction_id = LedgerRepository(session).remove_transaction(
+            user_id=repository_database.user_id,
+            transaction=transaction,
+        )
+
+    assert removed_transaction_id == external_transaction_id
+    with Session(repository_database.engine) as session:
+        persisted_transaction = session.scalar(
+            select(ExternalTransactionModel)
+            .where(ExternalTransactionModel.id == external_transaction_id)
+            .options(
+                selectinload(ExternalTransactionModel.journal_entries).selectinload(
+                    JournalEntryModel.postings
+                )
+            )
+        )
+
+        assert persisted_transaction is not None
+        assert persisted_transaction.status == "removed"
+        assert persisted_transaction.amount_cents == transaction.amount_cents
+        assert persisted_transaction.description == transaction.description
+        assert len(persisted_transaction.journal_entries) == 2
+
+        original = next(
+            entry
+            for entry in persisted_transaction.journal_entries
+            if entry.reversal_of_entry_id is None
+        )
+        reversal = next(
+            entry
+            for entry in persisted_transaction.journal_entries
+            if entry.reversal_of_entry_id is not None
+        )
+
+        assert original.sealed_at is not None
+        assert reversal.sealed_at is not None
+        assert reversal.reversal_of_entry_id == original.id
+        assert reversal.description == f"Reversal of {transaction.description}"
+
+        original_postings = sorted(
+            original.postings,
+            key=lambda posting: posting.line_number,
+        )
+        reversal_postings = sorted(
+            reversal.postings,
+            key=lambda posting: posting.line_number,
+        )
+        assert [posting.amount_cents for posting in original_postings] == [
+            1_250,
+            -1_250,
+        ]
+        assert [posting.amount_cents for posting in reversal_postings] == [
+            -1_250,
+            1_250,
+        ]
+        assert (
+            sum(
+                posting.amount_cents
+                for entry in persisted_transaction.journal_entries
+                for posting in entry.postings
+            )
+            == 0
+        )
+
+
+@pytest.mark.integration
+def test_remove_transaction_reverses_current_journal_after_modification(
+    repository_database: RepositoryDatabase,
+) -> None:
+    original = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="provider-transaction-1",
+        amount_cents=1_250,
+        description="Neighborhood Market",
+    )
+    modified = Transaction(
+        account_id=original.account_id,
+        provider_transaction_id=original.provider_transaction_id,
+        amount_cents=1_400,
+        description="Neighborhood Market with tip",
+    )
+
+    with Session(repository_database.engine) as session, session.begin():
+        external_transaction_id = LedgerRepository(session).add_transaction(
+            user_id=repository_database.user_id,
+            transaction=original,
+        )
+
+    with Session(repository_database.engine) as session, session.begin():
+        LedgerRepository(session).modify_transaction(
+            user_id=repository_database.user_id,
+            transaction=modified,
+        )
+
+    with Session(repository_database.engine) as session, session.begin():
+        LedgerRepository(session).remove_transaction(
+            user_id=repository_database.user_id,
+            transaction=modified,
+        )
+
+    with Session(repository_database.engine) as session:
+        persisted_transaction = session.scalar(
+            select(ExternalTransactionModel)
+            .where(ExternalTransactionModel.id == external_transaction_id)
+            .options(
+                selectinload(ExternalTransactionModel.journal_entries).selectinload(
+                    JournalEntryModel.postings
+                )
+            )
+        )
+
+        assert persisted_transaction is not None
+        assert persisted_transaction.status == "removed"
+        assert len(persisted_transaction.journal_entries) == 4
+        replacement = next(
+            entry
+            for entry in persisted_transaction.journal_entries
+            if entry.reversal_of_entry_id is None
+            and entry.description == modified.description
+        )
+        removal_reversal = next(
+            entry
+            for entry in persisted_transaction.journal_entries
+            if entry.reversal_of_entry_id == replacement.id
+        )
+        assert [
+            posting.amount_cents
+            for posting in sorted(
+                removal_reversal.postings,
+                key=lambda posting: posting.line_number,
+            )
+        ] == [-1_400, 1_400]
+        assert (
+            sum(
+                posting.amount_cents
+                for entry in persisted_transaction.journal_entries
+                for posting in entry.postings
+                if posting.ledger_account == "suspense:unclassified"
+            )
+            == 0
+        )
+
+
+@pytest.mark.integration
+def test_identical_duplicate_removal_is_idempotent(
+    repository_database: RepositoryDatabase,
+) -> None:
+    transaction = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="provider-transaction-1",
+        amount_cents=1_250,
+        description="Neighborhood Market",
+    )
+
+    with Session(repository_database.engine) as session, session.begin():
+        original_id = LedgerRepository(session).add_transaction(
+            user_id=repository_database.user_id,
+            transaction=transaction,
+        )
+
+    with Session(repository_database.engine) as session, session.begin():
+        first_removal_id = LedgerRepository(session).remove_transaction(
+            user_id=repository_database.user_id,
+            transaction=transaction,
+        )
+
+    with Session(repository_database.engine) as session, session.begin():
+        duplicate_removal_id = LedgerRepository(session).remove_transaction(
+            user_id=repository_database.user_id,
+            transaction=transaction,
+        )
+
+    assert first_removal_id == original_id
+    assert duplicate_removal_id == original_id
+    with Session(repository_database.engine) as session:
+        assert session.scalar(select(func.count(ExternalTransactionModel.id))) == 1
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 2
+        assert session.scalar(select(func.count(PostingModel.id))) == 4
+
+
+@pytest.mark.integration
+def test_remove_transaction_rejects_missing_transaction(
+    repository_database: RepositoryDatabase,
+) -> None:
+    transaction = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="missing-transaction",
+        amount_cents=1_250,
+        description="Neighborhood Market",
+    )
+
+    with (
+        pytest.raises(TransactionNotFoundError, match="does not exist"),
+        Session(repository_database.engine) as session,
+        session.begin(),
+    ):
+        LedgerRepository(session).remove_transaction(
+            user_id=repository_database.user_id,
+            transaction=transaction,
+        )
+
+    with Session(repository_database.engine) as session:
+        assert session.scalar(select(func.count(ExternalTransactionModel.id))) == 0
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 0
+        assert session.scalar(select(func.count(PostingModel.id))) == 0
+
+
+@pytest.mark.integration
+def test_remove_transaction_rejects_conflicting_payload_without_changes(
+    repository_database: RepositoryDatabase,
+) -> None:
+    original = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="provider-transaction-1",
+        amount_cents=1_250,
+        description="Neighborhood Market",
+    )
+    conflicting = Transaction(
+        account_id=original.account_id,
+        provider_transaction_id=original.provider_transaction_id,
+        amount_cents=1_400,
+        description=original.description,
+    )
+
+    with Session(repository_database.engine) as session, session.begin():
+        external_transaction_id = LedgerRepository(session).add_transaction(
+            user_id=repository_database.user_id,
+            transaction=original,
+        )
+
+    with (
+        pytest.raises(TransactionConflictError, match="removal data differs"),
+        Session(repository_database.engine) as session,
+        session.begin(),
+    ):
+        LedgerRepository(session).remove_transaction(
+            user_id=repository_database.user_id,
+            transaction=conflicting,
+        )
+
+    with Session(repository_database.engine) as session:
+        persisted_transaction = session.get(
+            ExternalTransactionModel, external_transaction_id
+        )
+        assert persisted_transaction is not None
+        assert persisted_transaction.status == "active"
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 1
+        assert session.scalar(select(func.count(PostingModel.id))) == 2
+
+
+@pytest.mark.integration
+def test_remove_transaction_rolls_back_status_and_reversal_when_sealing_fails(
+    repository_database: RepositoryDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transaction = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="provider-transaction-1",
+        amount_cents=1_250,
+        description="Neighborhood Market",
+    )
+
+    with Session(repository_database.engine) as session, session.begin():
+        external_transaction_id = LedgerRepository(session).add_transaction(
+            user_id=repository_database.user_id,
+            transaction=transaction,
+        )
+
+    with Session(repository_database.engine) as session:
+        real_flush = session.flush
+        flush_calls = 0
+
+        def fail_on_second_flush(objects: Sequence[Any] | None = None) -> None:
+            nonlocal flush_calls
+            flush_calls += 1
+            if flush_calls == 2:
+                raise InjectedPersistenceFailure("reversal sealing failed")
+            real_flush(objects)
+
+        monkeypatch.setattr(session, "flush", fail_on_second_flush)
+
+        with pytest.raises(InjectedPersistenceFailure), session.begin():
+            LedgerRepository(session).remove_transaction(
+                user_id=repository_database.user_id,
+                transaction=transaction,
+            )
+
+    with Session(repository_database.engine) as session:
+        persisted_transaction = session.get(
+            ExternalTransactionModel, external_transaction_id
+        )
+        assert persisted_transaction is not None
+        assert persisted_transaction.status == "active"
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 1
+        assert session.scalar(select(func.count(PostingModel.id))) == 2
