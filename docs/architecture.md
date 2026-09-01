@@ -102,6 +102,19 @@ The boundary intentionally models removals with only account and transaction
 identities. The repository uses those identities to load the last-known amount,
 description, and active journal required for the accounting reversal.
 
+## Durable synchronization identity
+
+`transaction_sync_states` stores progress for one provider connection. Its
+provider-neutral identity is `(provider_name, provider_connection_id)`, which is
+globally unique and owned by one Ledge user. A `NULL` cursor means the connection
+has not completed its first synchronization; a non-null cursor is the last
+successfully committed provider bookmark.
+
+The table exists, but no service advances its cursor yet. The next application
+checkpoint will fetch all available provider pages, lock the sync-state row,
+recheck its starting cursor, apply every ledger change, and store the final cursor
+inside one database transaction.
+
 ## Current transaction boundary
 
 The caller opens a SQLAlchemy transaction and passes its session to the
@@ -122,13 +135,15 @@ Integration tests inject failure after draft rows have been flushed but before
 sealing. They verify that additions leave no partial rows and removals retain the
 original active projection without a partial reversal.
 
-## Future sync-page boundary
+## Future synchronization boundary
 
-A sync page will eventually open one database transaction, apply every change,
-store the next cursor, and commit once. Any exception will roll back the entire
-page, including its cursor. Retrying will be safe because each provider
-transaction version will have a unique identity.
+A sync run will start from the stored cursor and fetch every currently available
+provider page before opening its write transaction. It will then lock and recheck
+the sync-state row, apply the complete fetched update, store the final cursor, and
+commit once. Any exception will roll back both ledger changes and cursor movement.
 
-If processing fails halfway through a page, no partial journal writes or new
-cursor should become visible. Receiving a webhook twice must be harmless because
-at-least-once systems naturally produce duplicate deliveries.
+If provider data changes during pagination, the fetched batch must be discarded
+and pagination restarted from the original cursor. If processing fails while
+writing the batch, no partial journal writes or new cursor should become visible.
+Receiving a webhook twice must be harmless because at-least-once systems naturally
+produce duplicate deliveries.

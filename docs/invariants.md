@@ -65,11 +65,15 @@ credits the card liability while the expense is debited.
   supply, verifies the account against the stored projection, appends one reversal
   of the active journal, and atomically marks the projection removed. Identical
   redelivery creates no new history.
+- Each `(provider_name, provider_connection_id)` identifies at most one durable
+  sync stream and belongs to one Ledge user. Its cursor may be null only to
+  represent a stream that has not completed an initial synchronization.
 
 ## Planned enforcement
 
 - Provider event IDs and transaction versions will distinguish duplicate, newer,
   and stale updates; version-aware idempotency is not implemented yet.
-- A sync page and its cursor update will share one database transaction.
+- A complete fetched update and its final cursor will share one database
+  transaction; the schema can store the cursor, but orchestration is still planned.
 - Authentication and user-scoped query services will enforce ownership at the API
   boundary; the relational schema already enforces user/account ownership.

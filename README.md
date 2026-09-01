@@ -38,7 +38,7 @@ Implemented now:
 - Docker Compose PostgreSQL development and test databases
 - SQLAlchemy mappings for users, financial accounts, external transactions,
   journal entries, and postings
-- Four Alembic migrations that build and remove the complete current schema
+- Five Alembic migrations that build and remove the complete current schema
 - Database-enforced journal sealing, minimum posting count, zero balance, and
   immutability after sealing
 - Real PostgreSQL integration coverage for connection, migration round trips,
@@ -52,10 +52,11 @@ Implemented now:
 - Injected failure coverage proving partially flushed additions, modifications,
   and removals roll back entirely
 - Provider-owned sync-page contracts and a deterministic JSON-backed fake provider
+- Durable per-user provider-connection sync state with a nullable initial cursor
 
 Not implemented yet:
 
-- Durable sync cursors and an application service that processes complete updates
+- An application service that processes complete updates and advances the cursor
 - Transaction versions, raw provider events, or stale-update protection
 - Pending-to-posted replacement
 - FastAPI, authentication, Plaid, or a dashboard
@@ -516,7 +517,8 @@ The current project is a deliberately bounded persistence checkpoint:
   input or state, and rollback coverage appropriate to each operation.
 - The same provider ID with different data is detectable, but Ledge cannot yet
   determine whether that data is newer or stale.
-- There is no provider event ID, transaction version, sync cursor, or page state.
+- There is no provider event ID, transaction version, or applied-page history.
+- Sync cursors can be stored, but no service advances them with ledger changes yet.
 - Pending-to-posted replacement is documented but intentionally deferred.
 - `suspense:unclassified` is a neutral offset, not a categorization system.
 - There is one currency convention. User/account ownership exists in the schema,
@@ -552,6 +554,7 @@ identity and cursor processing must distinguish duplicate, newer, and stale data
 - [x] Injected addition failure and complete rollback proof
 - [x] Persisted removal with duplicate, conflict, and rollback coverage
 - [x] Complete persisted-modification edge-case and rollback coverage
+- [x] Durable provider-connection sync state and cursor storage
 - [ ] Provider transaction versions and stale-update protection
 
 ### 3. Fake provider synchronization
@@ -559,10 +562,11 @@ identity and cursor processing must distinguish duplicate, newer, and stale data
 - [x] `TransactionProvider` protocol owned by Ledge
 - [x] Normalized JSON fixtures loaded at the provider boundary
 - [x] Added, modified, removed, empty, and multi-page provider responses
+- [x] PostgreSQL sync-state schema with an initial nullable cursor
 - [ ] Synchronization service that applies a complete update
-- Cursor state committed with transaction changes
-- Retry after an injected page failure
-- Pending-to-posted fixtures once the base sync pipeline works
+- [ ] Cursor state committed with transaction changes
+- [ ] Retry after an injected synchronization failure
+- [ ] Pending-to-posted fixtures once the base sync pipeline works
 
 ### 4. Local FastAPI application
 
@@ -666,7 +670,7 @@ they have been measured and the test setup is documented.
 - `docs/invariants.md` - correctness requirements and sign conventions
 - `docs/lifecycles.md` - modification, removal, and future pending lifecycles
 
-The immediate next task is durable cursor state and the synchronization service.
-Do not add FastAPI, Plaid, or AWS until provider-style pages can apply added,
-modified, and removed events atomically and tests prove failures leave no partial
-ledger or cursor state.
+The immediate next task is the synchronization service that uses the durable
+cursor. Do not add FastAPI, Plaid, or AWS until provider-style pages can apply
+added, modified, and removed events atomically and tests prove failures leave no
+partial ledger or cursor state.

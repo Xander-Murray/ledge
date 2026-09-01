@@ -48,6 +48,10 @@ class UserModel(Base):
 
     accounts: Mapped[list[FinancialAccountModel]] = relationship(back_populates="user")
 
+    transaction_sync_states: Mapped[list[TransactionSyncStateModel]] = relationship(
+        back_populates="user"
+    )
+
 
 class FinancialAccountModel(Base):
     """A checking, savings, or credit account owned by one Ledge user."""
@@ -94,6 +98,58 @@ class FinancialAccountModel(Base):
     transactions: Mapped[list[ExternalTransactionModel]] = relationship(
         back_populates="account"
     )
+
+
+class TransactionSyncStateModel(Base):
+    """Durable progress for one provider transaction-update stream."""
+
+    __tablename__ = "transaction_sync_states"
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(provider_name)) > 0",
+            name="provider_name_nonempty",
+        ),
+        CheckConstraint(
+            "length(trim(provider_connection_id)) > 0",
+            name="provider_connection_id_nonempty",
+        ),
+        UniqueConstraint(
+            "provider_name",
+            "provider_connection_id",
+            name="uq_transaction_sync_states_provider_connection",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+
+    provider_name: Mapped[str] = mapped_column(nullable=False)
+
+    provider_connection_id: Mapped[str] = mapped_column(nullable=False)
+
+    cursor: Mapped[str | None] = mapped_column(nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    user: Mapped[UserModel] = relationship(back_populates="transaction_sync_states")
 
 
 class ExternalTransactionModel(Base):

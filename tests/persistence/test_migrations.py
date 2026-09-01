@@ -43,6 +43,7 @@ def test_migrations_upgrade_and_downgrade(
             "financial_accounts",
             "journal_entries",
             "postings",
+            "transaction_sync_states",
             "users",
         }
         command.check(config)
