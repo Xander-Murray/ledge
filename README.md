@@ -500,9 +500,8 @@ tests/scenarios/                  End-to-end in-memory feed scenarios
 
 The current project is a deliberately bounded persistence checkpoint:
 
-- Persisted addition and removal have duplicate, conflict, and rollback coverage.
-  Persisted modification currently has its successful reversal-and-replacement
-  path tested; its missing, removed, duplicate, and rollback cases remain.
+- Persisted addition, modification, and removal have success, idempotency, invalid
+  input or state, and rollback coverage appropriate to each operation.
 - The same provider ID with different data is detectable, but Ledge cannot yet
   determine whether that data is newer or stale.
 - There is no provider event ID, transaction version, sync cursor, or page state.
@@ -540,7 +539,7 @@ identity and cursor processing must distinguish duplicate, newer, and stale data
 - [x] Sequential duplicate-safe additions and conflict rejection
 - [x] Injected addition failure and complete rollback proof
 - [x] Persisted removal with duplicate, conflict, and rollback coverage
-- [ ] Complete persisted-modification edge-case and rollback coverage
+- [x] Complete persisted-modification edge-case and rollback coverage
 - [ ] Provider transaction versions and stale-update protection
 
 ### 3. Fake provider synchronization
@@ -654,7 +653,7 @@ they have been measured and the test setup is documented.
 - `docs/invariants.md` - correctness requirements and sign conventions
 - `docs/lifecycles.md` - modification, removal, and future pending lifecycles
 
-The immediate next task is persisted-modification edge-case and rollback coverage,
-followed by the fake provider synchronization boundary. Do not add FastAPI, Plaid,
-or AWS until provider-style pages can apply added, modified, and removed events
-atomically and tests prove failures leave no partial ledger or cursor state.
+The immediate next task is the fake provider synchronization boundary. Do not add
+FastAPI, Plaid, or AWS until provider-style pages can apply added, modified, and
+removed events atomically and tests prove failures leave no partial ledger or
+cursor state.

@@ -14,7 +14,11 @@ from sqlalchemy import Engine, create_engine, func, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, selectinload
 
-from domain.ledger import TransactionConflictError, TransactionNotFoundError
+from domain.ledger import (
+    TransactionConflictError,
+    TransactionNotFoundError,
+    TransactionStateError,
+)
 from domain.models import Transaction
 from persistence.models import (
     ExternalTransactionModel,
@@ -361,6 +365,185 @@ def test_modify_transaction_appends_reversal_and_replacement_journals(
             -1_400,
         ]
         assert session.scalar(select(func.count(PostingModel.id))) == 6
+
+
+@pytest.mark.integration
+def test_identical_duplicate_modification_is_idempotent(
+    repository_database: RepositoryDatabase,
+) -> None:
+    original = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="provider-transaction-1",
+        amount_cents=1_250,
+        description="Neighborhood Market",
+    )
+    modified = Transaction(
+        account_id=original.account_id,
+        provider_transaction_id=original.provider_transaction_id,
+        amount_cents=1_400,
+        description="Neighborhood Market with tip",
+    )
+
+    with Session(repository_database.engine) as session, session.begin():
+        original_id = LedgerRepository(session).add_transaction(
+            user_id=repository_database.user_id,
+            transaction=original,
+        )
+
+    with Session(repository_database.engine) as session, session.begin():
+        first_modification_id = LedgerRepository(session).modify_transaction(
+            user_id=repository_database.user_id,
+            transaction=modified,
+        )
+
+    with Session(repository_database.engine) as session, session.begin():
+        duplicate_modification_id = LedgerRepository(session).modify_transaction(
+            user_id=repository_database.user_id,
+            transaction=modified,
+        )
+
+    assert first_modification_id == original_id
+    assert duplicate_modification_id == original_id
+    with Session(repository_database.engine) as session:
+        persisted_transaction = session.get(ExternalTransactionModel, original_id)
+        assert persisted_transaction is not None
+        assert persisted_transaction.amount_cents == modified.amount_cents
+        assert persisted_transaction.description == modified.description
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 3
+        assert session.scalar(select(func.count(PostingModel.id))) == 6
+
+
+@pytest.mark.integration
+def test_modify_transaction_rejects_missing_transaction(
+    repository_database: RepositoryDatabase,
+) -> None:
+    transaction = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="missing-transaction",
+        amount_cents=1_400,
+        description="Neighborhood Market with tip",
+    )
+
+    with (
+        pytest.raises(TransactionNotFoundError, match="does not exist"),
+        Session(repository_database.engine) as session,
+        session.begin(),
+    ):
+        LedgerRepository(session).modify_transaction(
+            user_id=repository_database.user_id,
+            transaction=transaction,
+        )
+
+    with Session(repository_database.engine) as session:
+        assert session.scalar(select(func.count(ExternalTransactionModel.id))) == 0
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 0
+        assert session.scalar(select(func.count(PostingModel.id))) == 0
+
+
+@pytest.mark.integration
+def test_modify_transaction_rejects_removed_transaction_without_changes(
+    repository_database: RepositoryDatabase,
+) -> None:
+    original = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="provider-transaction-1",
+        amount_cents=1_250,
+        description="Neighborhood Market",
+    )
+    modified = Transaction(
+        account_id=original.account_id,
+        provider_transaction_id=original.provider_transaction_id,
+        amount_cents=1_400,
+        description="Neighborhood Market with tip",
+    )
+
+    with Session(repository_database.engine) as session, session.begin():
+        external_transaction_id = LedgerRepository(session).add_transaction(
+            user_id=repository_database.user_id,
+            transaction=original,
+        )
+
+    with Session(repository_database.engine) as session, session.begin():
+        LedgerRepository(session).remove_transaction(
+            user_id=repository_database.user_id,
+            transaction=original,
+        )
+
+    with (
+        pytest.raises(TransactionStateError, match="cannot be modified"),
+        Session(repository_database.engine) as session,
+        session.begin(),
+    ):
+        LedgerRepository(session).modify_transaction(
+            user_id=repository_database.user_id,
+            transaction=modified,
+        )
+
+    with Session(repository_database.engine) as session:
+        persisted_transaction = session.get(
+            ExternalTransactionModel, external_transaction_id
+        )
+        assert persisted_transaction is not None
+        assert persisted_transaction.status == "removed"
+        assert persisted_transaction.amount_cents == original.amount_cents
+        assert persisted_transaction.description == original.description
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 2
+        assert session.scalar(select(func.count(PostingModel.id))) == 4
+
+
+@pytest.mark.integration
+def test_modify_transaction_rolls_back_projection_and_journals_when_sealing_fails(
+    repository_database: RepositoryDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="provider-transaction-1",
+        amount_cents=1_250,
+        description="Neighborhood Market",
+    )
+    modified = Transaction(
+        account_id=original.account_id,
+        provider_transaction_id=original.provider_transaction_id,
+        amount_cents=1_400,
+        description="Neighborhood Market with tip",
+    )
+
+    with Session(repository_database.engine) as session, session.begin():
+        external_transaction_id = LedgerRepository(session).add_transaction(
+            user_id=repository_database.user_id,
+            transaction=original,
+        )
+
+    with Session(repository_database.engine) as session:
+        real_flush = session.flush
+        flush_calls = 0
+
+        def fail_on_second_flush(objects: Sequence[Any] | None = None) -> None:
+            nonlocal flush_calls
+            flush_calls += 1
+            if flush_calls == 2:
+                raise InjectedPersistenceFailure("replacement sealing failed")
+            real_flush(objects)
+
+        monkeypatch.setattr(session, "flush", fail_on_second_flush)
+
+        with pytest.raises(InjectedPersistenceFailure), session.begin():
+            LedgerRepository(session).modify_transaction(
+                user_id=repository_database.user_id,
+                transaction=modified,
+            )
+
+    with Session(repository_database.engine) as session:
+        persisted_transaction = session.get(
+            ExternalTransactionModel, external_transaction_id
+        )
+        assert persisted_transaction is not None
+        assert persisted_transaction.status == "active"
+        assert persisted_transaction.amount_cents == original.amount_cents
+        assert persisted_transaction.description == original.description
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 1
+        assert session.scalar(select(func.count(PostingModel.id))) == 2
 
 
 @pytest.mark.integration

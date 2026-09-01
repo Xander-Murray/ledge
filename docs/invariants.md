@@ -58,7 +58,9 @@ credits the card liability while the expense is debited.
   and injected-failure coverage proves a partially flushed addition rolls back
   without leaving transaction, journal, or posting rows.
 - Persisted modification locks the current projection, requires exactly one
-  active journal, and atomically appends a reversal and replacement.
+  active journal, and atomically appends a reversal and replacement. Identical
+  redelivery is a no-op, removed transactions reject modification, and failures
+  roll back both the projection update and new journal rows.
 - Persisted removal locks the current projection, requires an exact payload match,
   appends one reversal of the active journal, and atomically marks the projection
   removed. Identical redelivery creates no new history.

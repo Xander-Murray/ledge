@@ -67,18 +67,19 @@ the obsolete original journal.
 
 ### Failure after the first change in a sync page
 
-**Status:** Repository rollback is proven for addition and removal; page and cursor
-state remain planned. The future page transaction will roll back journal rows,
-transaction versions, and cursor state together. A retry will begin from the old
-cursor and reapply the page.
+**Status:** Repository rollback is proven for addition, modification, and removal;
+page and cursor state remain planned. The future page transaction will roll back
+journal rows, transaction versions, and cursor state together. A retry will begin
+from the old cursor and reapply the page.
 
 ### Duplicate delivery
 
-**Status:** Sequential duplicate additions and removals are implemented. An
-identical payload returns the existing external transaction ID without another
-journal; conflicting data is rejected. Concurrent missing-row races and
-event/version identities remain future boundaries, with the database uniqueness
-constraint providing final provider-identity protection today.
+**Status:** Sequential duplicate additions, modifications, and removals are
+implemented. An identical payload returns the existing external transaction ID
+without another journal; conflicting data is rejected where the event contract
+requires an exact match. Concurrent missing-row races and event/version identities
+remain future boundaries, with the database uniqueness constraint providing final
+provider-identity protection today.
 
 ### Invalid unbalanced journal
 
