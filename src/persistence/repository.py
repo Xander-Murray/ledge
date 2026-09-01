@@ -11,7 +11,7 @@ from domain.ledger import (
     create_journal_entry,
     create_reversal_entry,
 )
-from domain.models import JournalEntry, Posting, Transaction
+from domain.models import JournalEntry, Posting, Transaction, TransactionRemoval
 from persistence.models import (
     ExternalTransactionModel,
     JournalEntryModel,
@@ -145,7 +145,12 @@ class LedgerRepository:
 
         return existing.id
 
-    def remove_transaction(self, *, user_id: UUID, transaction: Transaction) -> UUID:
+    def remove_transaction(
+        self,
+        *,
+        user_id: UUID,
+        removal: TransactionRemoval,
+    ) -> UUID:
         """Stage a projection removal and reversal of its active journal.
 
         The caller owns the surrounding transaction and decides whether to commit
@@ -153,27 +158,23 @@ class LedgerRepository:
         """
         existing = self._load_transaction_for_update(
             user_id=user_id,
-            provider_transaction_id=transaction.provider_transaction_id,
+            provider_transaction_id=removal.provider_transaction_id,
         )
 
         if existing is None:
             raise TransactionNotFoundError(
-                f"Transaction {transaction.provider_transaction_id!r} does not exist"
+                f"Transaction {removal.provider_transaction_id!r} does not exist"
             )
-        if (
-            existing.financial_account_id != transaction.account_id
-            or existing.amount_cents != transaction.amount_cents
-            or existing.description != transaction.description
-        ):
+        if existing.financial_account_id != removal.account_id:
             raise TransactionConflictError(
-                f"Transaction {transaction.provider_transaction_id!r} "
-                "removal data differs from current data"
+                f"Transaction {removal.provider_transaction_id!r} "
+                "removal account differs from current data"
             )
         if existing.status == "removed":
             return existing.id
         if existing.status != "active":
             raise TransactionStateError(
-                f"Transaction {transaction.provider_transaction_id!r} "
+                f"Transaction {removal.provider_transaction_id!r} "
                 f"cannot be removed from status {existing.status!r}"
             )
 

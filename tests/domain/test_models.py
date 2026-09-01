@@ -2,7 +2,21 @@ from uuid import UUID
 
 import pytest
 
-from domain.models import JournalEntry, LedgerState, Posting, Transaction
+from domain.models import (
+    JournalEntry,
+    LedgerState,
+    Posting,
+    Transaction,
+    TransactionRemoval,
+)
+
+
+def test_transaction_removal_rejects_empty_provider_id() -> None:
+    with pytest.raises(ValueError, match="provider_transaction_id must not be empty"):
+        TransactionRemoval(
+            account_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            provider_transaction_id="  ",
+        )
 
 
 def test_journal_entry_accepts_balanced_postings() -> None:

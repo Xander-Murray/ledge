@@ -47,14 +47,16 @@ Implemented now:
   conflicting-payload rejection
 - Repository-managed modifications that append sealed reversal and replacement
   journals while updating the current external projection
-- Injected failure coverage proving partially flushed additions roll back entirely
-- A verified checkpoint of 64 passing tests with clean Ruff lint and formatting
+- Repository-managed removals that accept provider identity-only events and append
+  one reversal without deleting history
+- Injected failure coverage proving partially flushed additions, modifications,
+  and removals roll back entirely
+- Provider-owned sync-page contracts and a deterministic JSON-backed fake provider
 
 Not implemented yet:
 
-- Persisted removal and its idempotency, conflict, and rollback behavior
-- Complete edge-case and rollback coverage for persisted modifications
-- Transaction versions, provider events, sync pages, or cursors
+- Durable sync cursors and an application service that processes complete updates
+- Transaction versions, raw provider events, or stale-update protection
 - Pending-to-posted replacement
 - FastAPI, authentication, Plaid, or a dashboard
 - S3, SQS, Lambda, EC2, a dead-letter queue, or CloudWatch telemetry
@@ -82,10 +84,11 @@ Ledge never moves money. Version 1 is read-only and uses sandbox data.
 
 ## Core mental model
 
-The current domain has four main objects:
+The current domain has five main objects:
 
 ```text
 Transaction     What the provider says happened
+Removal         Which provider transaction disappeared from which account
 Posting         One signed account-level financial effect
 JournalEntry    Ledge's immutable record of one accounting event
 LedgerState     The current in-memory transactions and complete journal history
@@ -104,6 +107,12 @@ description:             Neighborhood Market
 
 Provider transaction IDs are used to detect duplicate delivery. The provider
 controls their format; Ledge controls its own internal UUIDs.
+
+### Transaction removal
+
+A `TransactionRemoval` contains only an account ID and provider transaction ID.
+Providers do not resend the removed transaction's amount or description, so Ledge
+loads that last-known data from PostgreSQL before reversing its active journal.
 
 ### Posting
 
@@ -481,18 +490,21 @@ README.md                         Project orientation and operating guide
 docs/architecture.md              Architecture notes
 docs/invariants.md                Financial and processing guarantees
 docs/lifecycles.md                Transaction lifecycle examples
-src/domain/models.py              Transaction, Posting, JournalEntry, LedgerState
+src/domain/models.py              Transaction, Removal, Posting, JournalEntry, State
 src/domain/invariants.py          Shared balance validation
 src/domain/ledger.py              Journal factories and state transitions
 src/persistence/database.py       Engine and session-factory configuration
 src/persistence/models.py         SQLAlchemy persistence mappings
 src/persistence/repository.py     Atomic add, modify, and remove persistence
+src/providers/base.py             Provider-independent page and protocol contracts
+src/providers/fake.py             Deterministic JSON-backed provider adapter
 migrations/versions/              Ordered PostgreSQL schema and trigger changes
 tests/domain/test_ledger.py       Posting, journal, and addition behavior
 tests/domain/test_models.py       Model invariants and immutable state
 tests/domain/test_reversals.py    Reversal behavior
 tests/domain/test_transitions.py  Modified and removed lifecycles
 tests/persistence/                Database, trigger, repository, and rollback tests
+tests/providers/                  Provider contract, fixture, and pagination tests
 tests/scenarios/                  End-to-end in-memory feed scenarios
 ```
 
@@ -544,9 +556,10 @@ identity and cursor processing must distinguish duplicate, newer, and stale data
 
 ### 3. Fake provider synchronization
 
-- `TransactionProvider` protocol owned by Ledge
-- JSON fixtures translated at the provider boundary
-- Added, modified, removed, duplicate, and multi-page updates
+- [x] `TransactionProvider` protocol owned by Ledge
+- [x] Normalized JSON fixtures loaded at the provider boundary
+- [x] Added, modified, removed, empty, and multi-page provider responses
+- [ ] Synchronization service that applies a complete update
 - Cursor state committed with transaction changes
 - Retry after an injected page failure
 - Pending-to-posted fixtures once the base sync pipeline works
@@ -653,7 +666,7 @@ they have been measured and the test setup is documented.
 - `docs/invariants.md` - correctness requirements and sign conventions
 - `docs/lifecycles.md` - modification, removal, and future pending lifecycles
 
-The immediate next task is the fake provider synchronization boundary. Do not add
-FastAPI, Plaid, or AWS until provider-style pages can apply added, modified, and
-removed events atomically and tests prove failures leave no partial ledger or
-cursor state.
+The immediate next task is durable cursor state and the synchronization service.
+Do not add FastAPI, Plaid, or AWS until provider-style pages can apply added,
+modified, and removed events atomically and tests prove failures leave no partial
+ledger or cursor state.

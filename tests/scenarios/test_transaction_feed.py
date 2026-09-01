@@ -7,7 +7,7 @@ from domain.ledger import (
     apply_transaction_modified,
     apply_transaction_removed,
 )
-from domain.models import LedgerState, Transaction
+from domain.models import LedgerState, Transaction, TransactionRemoval
 
 ACCOUNT_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 
@@ -46,10 +46,14 @@ def test_transaction_feed_reconciles_to_one_correct_final_state() -> None:
         reversal_entry_id=UUID(int=3),
         replacement_entry_id=UUID(int=4),
     )
-    state = apply_transaction_removed(state, refund, UUID(int=5))
+    refund_removal = TransactionRemoval(
+        account_id=refund.account_id,
+        provider_transaction_id=refund.provider_transaction_id,
+    )
+    state = apply_transaction_removed(state, refund_removal, UUID(int=5))
 
     state_before_duplicate_removal = state
-    state = apply_transaction_removed(state, refund, UUID(int=98))
+    state = apply_transaction_removed(state, refund_removal, UUID(int=98))
     assert state is state_before_duplicate_removal
 
     assert state.transactions_by_provider_id == {

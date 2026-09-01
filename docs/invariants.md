@@ -61,9 +61,10 @@ credits the card liability while the expense is debited.
   active journal, and atomically appends a reversal and replacement. Identical
   redelivery is a no-op, removed transactions reject modification, and failures
   roll back both the projection update and new journal rows.
-- Persisted removal locks the current projection, requires an exact payload match,
-  appends one reversal of the active journal, and atomically marks the projection
-  removed. Identical redelivery creates no new history.
+- Persisted removal accepts the account and transaction identities providers
+  supply, verifies the account against the stored projection, appends one reversal
+  of the active journal, and atomically marks the projection removed. Identical
+  redelivery creates no new history.
 
 ## Planned enforcement
 

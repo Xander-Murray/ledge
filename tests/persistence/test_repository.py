@@ -19,7 +19,7 @@ from domain.ledger import (
     TransactionNotFoundError,
     TransactionStateError,
 )
-from domain.models import Transaction
+from domain.models import Transaction, TransactionRemoval
 from persistence.models import (
     ExternalTransactionModel,
     FinancialAccountModel,
@@ -41,6 +41,13 @@ class RepositoryDatabase:
 
 class InjectedPersistenceFailure(RuntimeError):
     """Failure raised by a test between repository flushes."""
+
+
+def removal_for(transaction: Transaction) -> TransactionRemoval:
+    return TransactionRemoval(
+        account_id=transaction.account_id,
+        provider_transaction_id=transaction.provider_transaction_id,
+    )
 
 
 def _get_test_database_url() -> str:
@@ -466,7 +473,7 @@ def test_modify_transaction_rejects_removed_transaction_without_changes(
     with Session(repository_database.engine) as session, session.begin():
         LedgerRepository(session).remove_transaction(
             user_id=repository_database.user_id,
-            transaction=original,
+            removal=removal_for(original),
         )
 
     with (
@@ -566,7 +573,7 @@ def test_remove_transaction_appends_reversal_and_marks_projection_removed(
     with Session(repository_database.engine) as session, session.begin():
         removed_transaction_id = LedgerRepository(session).remove_transaction(
             user_id=repository_database.user_id,
-            transaction=transaction,
+            removal=removal_for(transaction),
         )
 
     assert removed_transaction_id == external_transaction_id
@@ -661,7 +668,7 @@ def test_remove_transaction_reverses_current_journal_after_modification(
     with Session(repository_database.engine) as session, session.begin():
         LedgerRepository(session).remove_transaction(
             user_id=repository_database.user_id,
-            transaction=modified,
+            removal=removal_for(modified),
         )
 
     with Session(repository_database.engine) as session:
@@ -727,13 +734,13 @@ def test_identical_duplicate_removal_is_idempotent(
     with Session(repository_database.engine) as session, session.begin():
         first_removal_id = LedgerRepository(session).remove_transaction(
             user_id=repository_database.user_id,
-            transaction=transaction,
+            removal=removal_for(transaction),
         )
 
     with Session(repository_database.engine) as session, session.begin():
         duplicate_removal_id = LedgerRepository(session).remove_transaction(
             user_id=repository_database.user_id,
-            transaction=transaction,
+            removal=removal_for(transaction),
         )
 
     assert first_removal_id == original_id
@@ -762,7 +769,7 @@ def test_remove_transaction_rejects_missing_transaction(
     ):
         LedgerRepository(session).remove_transaction(
             user_id=repository_database.user_id,
-            transaction=transaction,
+            removal=removal_for(transaction),
         )
 
     with Session(repository_database.engine) as session:
@@ -772,7 +779,7 @@ def test_remove_transaction_rejects_missing_transaction(
 
 
 @pytest.mark.integration
-def test_remove_transaction_rejects_conflicting_payload_without_changes(
+def test_remove_transaction_rejects_conflicting_account_without_changes(
     repository_database: RepositoryDatabase,
 ) -> None:
     original = Transaction(
@@ -781,11 +788,9 @@ def test_remove_transaction_rejects_conflicting_payload_without_changes(
         amount_cents=1_250,
         description="Neighborhood Market",
     )
-    conflicting = Transaction(
-        account_id=original.account_id,
+    conflicting = TransactionRemoval(
+        account_id=uuid4(),
         provider_transaction_id=original.provider_transaction_id,
-        amount_cents=1_400,
-        description=original.description,
     )
 
     with Session(repository_database.engine) as session, session.begin():
@@ -795,13 +800,13 @@ def test_remove_transaction_rejects_conflicting_payload_without_changes(
         )
 
     with (
-        pytest.raises(TransactionConflictError, match="removal data differs"),
+        pytest.raises(TransactionConflictError, match="removal account differs"),
         Session(repository_database.engine) as session,
         session.begin(),
     ):
         LedgerRepository(session).remove_transaction(
             user_id=repository_database.user_id,
-            transaction=conflicting,
+            removal=conflicting,
         )
 
     with Session(repository_database.engine) as session:
@@ -848,7 +853,7 @@ def test_remove_transaction_rolls_back_status_and_reversal_when_sealing_fails(
         with pytest.raises(InjectedPersistenceFailure), session.begin():
             LedgerRepository(session).remove_transaction(
                 user_id=repository_database.user_id,
-                transaction=transaction,
+                removal=removal_for(transaction),
             )
 
     with Session(repository_database.engine) as session:

@@ -10,7 +10,7 @@ from domain.ledger import (
     apply_transaction_modified,
     apply_transaction_removed,
 )
-from domain.models import LedgerState, Transaction
+from domain.models import LedgerState, Transaction, TransactionRemoval
 
 ACCOUNT_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 ORIGINAL_ENTRY_ID = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
@@ -41,11 +41,22 @@ def create_state_with_transaction(
     )
 
 
+def removal_for(transaction: Transaction) -> TransactionRemoval:
+    return TransactionRemoval(
+        account_id=transaction.account_id,
+        provider_transaction_id=transaction.provider_transaction_id,
+    )
+
+
 def test_removed_transaction_is_reversed_and_retained_for_audit() -> None:
     transaction = create_transaction()
     state = create_state_with_transaction(transaction)
 
-    result = apply_transaction_removed(state, transaction, REVERSAL_ENTRY_ID)
+    result = apply_transaction_removed(
+        state,
+        removal_for(transaction),
+        REVERSAL_ENTRY_ID,
+    )
 
     assert result.transactions_by_provider_id == {
         transaction.provider_transaction_id: transaction,
@@ -68,13 +79,13 @@ def test_duplicate_removal_returns_the_existing_state() -> None:
     transaction = create_transaction()
     removed_state = apply_transaction_removed(
         create_state_with_transaction(transaction),
-        transaction,
+        removal_for(transaction),
         REVERSAL_ENTRY_ID,
     )
 
     result = apply_transaction_removed(
         removed_state,
-        transaction,
+        removal_for(transaction),
         REPLACEMENT_ENTRY_ID,
     )
 
@@ -86,16 +97,19 @@ def test_removing_an_unknown_transaction_is_rejected() -> None:
     with pytest.raises(TransactionNotFoundError, match="does not exist"):
         apply_transaction_removed(
             LedgerState.empty(),
-            create_transaction(),
+            removal_for(create_transaction()),
             REVERSAL_ENTRY_ID,
         )
 
 
-def test_removal_data_must_match_the_current_transaction() -> None:
+def test_removal_account_must_match_the_current_transaction() -> None:
     current = create_transaction()
-    conflicting = create_transaction(amount_cents=1_400)
+    conflicting = TransactionRemoval(
+        account_id=UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"),
+        provider_transaction_id=current.provider_transaction_id,
+    )
 
-    with pytest.raises(TransactionConflictError, match="differs from current data"):
+    with pytest.raises(TransactionConflictError, match="account differs"):
         apply_transaction_removed(
             create_state_with_transaction(current),
             conflicting,
@@ -173,7 +187,7 @@ def test_removed_transaction_cannot_be_modified() -> None:
     original = create_transaction()
     removed_state = apply_transaction_removed(
         create_state_with_transaction(original),
-        original,
+        removal_for(original),
         REVERSAL_ENTRY_ID,
     )
 

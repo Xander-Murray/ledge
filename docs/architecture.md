@@ -76,6 +76,32 @@ projection in `external_transactions` and appends balanced, sealed history to
 `journal_entries` and `postings`. Plaid, AWS, FastAPI, and React remain later
 phases.
 
+## Current provider boundary
+
+```text
+normalized JSON fixture
+        |
+        v
+FakeTransactionProvider
+        |
+        v
+TransactionSyncPage
+├── added Transaction values
+├── modified Transaction values
+├── removed TransactionRemoval values
+├── next_cursor
+└── has_more
+```
+
+`TransactionProvider` is a protocol owned by Ledge. The fake implementation makes
+pagination and provider changes deterministic without adding network credentials.
+A future Plaid adapter will translate Plaid account and transaction fields into
+the same normalized types, leaving ledger and synchronization code provider-free.
+
+The boundary intentionally models removals with only account and transaction
+identities. The repository uses those identities to load the last-known amount,
+description, and active journal required for the accounting reversal.
+
 ## Current transaction boundary
 
 The caller opens a SQLAlchemy transaction and passes its session to the

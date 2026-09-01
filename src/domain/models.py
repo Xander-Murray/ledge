@@ -24,6 +24,18 @@ class Transaction:
 
 
 @dataclass(frozen=True, slots=True)
+class TransactionRemoval:
+    """The identity a provider supplies when a transaction is removed."""
+
+    account_id: UUID
+    provider_transaction_id: str
+
+    def __post_init__(self) -> None:
+        if not self.provider_transaction_id.strip():
+            raise ValueError("provider_transaction_id must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
 class Posting:
     """One signed debit (positive) or credit (negative)."""
 

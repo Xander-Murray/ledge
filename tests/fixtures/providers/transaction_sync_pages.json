@@ -1,0 +1,51 @@
+[
+  {
+    "request_cursor": null,
+    "added": [
+      {
+        "account_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "provider_transaction_id": "grocery-1",
+        "amount_cents": 1250,
+        "description": "Neighborhood Market"
+      },
+      {
+        "account_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "provider_transaction_id": "refund-1",
+        "amount_cents": -500,
+        "description": "Returned item"
+      }
+    ],
+    "modified": [],
+    "removed": [],
+    "next_cursor": "cursor-1",
+    "has_more": true
+  },
+  {
+    "request_cursor": "cursor-1",
+    "added": [],
+    "modified": [
+      {
+        "account_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "provider_transaction_id": "grocery-1",
+        "amount_cents": 1400,
+        "description": "Neighborhood Market with tip"
+      }
+    ],
+    "removed": [
+      {
+        "account_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "provider_transaction_id": "refund-1"
+      }
+    ],
+    "next_cursor": "cursor-2",
+    "has_more": false
+  },
+  {
+    "request_cursor": "cursor-2",
+    "added": [],
+    "modified": [],
+    "removed": [],
+    "next_cursor": "cursor-2",
+    "has_more": false
+  }
+]

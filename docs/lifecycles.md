@@ -57,11 +57,12 @@ and unchanged.
 
 No history is deleted. Re-delivering removal v2 creates nothing new.
 
-The persisted workflow locks the projection, verifies that the removal payload
-matches its latest known data, finds exactly one active journal, appends and seals
-its linked reversal, and marks the projection removed in one database transaction.
-This also works after modification: removal reverses the replacement journal, not
-the obsolete original journal.
+The provider supplies the removed transaction and account identities, not the
+previous amount and description. The persisted workflow locks and loads that
+projection, verifies its account, finds exactly one active journal, appends and
+seals its linked reversal, and marks the projection removed in one database
+transaction. This also works after modification: removal reverses the replacement
+journal, not the obsolete original journal.
 
 ## Failure and recovery scenarios
 

@@ -1,7 +1,13 @@
 from uuid import UUID
 
 from domain.invariants import assert_balanced
-from domain.models import JournalEntry, LedgerState, Posting, Transaction
+from domain.models import (
+    JournalEntry,
+    LedgerState,
+    Posting,
+    Transaction,
+    TransactionRemoval,
+)
 
 
 class TransactionConflictError(ValueError):
@@ -99,18 +105,18 @@ def apply_transaction_added(
 
 def apply_transaction_removed(
     state: LedgerState,
-    transaction: Transaction,
+    removal: TransactionRemoval,
     journal_entry_id: UUID,
 ) -> LedgerState:
     """Reverse and mark a known provider transaction as removed."""
-    provider_id = transaction.provider_transaction_id
+    provider_id = removal.provider_transaction_id
     existing_transaction = state.transactions_by_provider_id.get(provider_id)
 
     if existing_transaction is None:
         raise TransactionNotFoundError(f"Transaction {provider_id!r} does not exist")
-    if existing_transaction != transaction:
+    if existing_transaction.account_id != removal.account_id:
         raise TransactionConflictError(
-            f"Transaction {provider_id!r} removal data differs from current data"
+            f"Transaction {provider_id!r} removal account differs from current data"
         )
     if provider_id in state.removed_provider_transaction_ids:
         return state
