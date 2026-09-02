@@ -20,9 +20,9 @@ visible and give it a concrete consumer use case.
 
 ## Project status
 
-Ledge currently has a tested pure-Python domain layer and a reproducible
-PostgreSQL persistence layer. The repository now persists additions and
-modifications, and removals atomically.
+Ledge currently has a tested pure-Python domain layer, reproducible PostgreSQL
+persistence, and a local synchronization application service. Complete fake
+provider updates now commit ledger changes and cursor advancement atomically.
 
 Implemented now:
 
@@ -53,10 +53,11 @@ Implemented now:
   and removals roll back entirely
 - Provider-owned sync-page contracts and a deterministic JSON-backed fake provider
 - Durable per-user provider-connection sync state with a nullable initial cursor
+- Multi-page synchronization with cursor race detection, atomic batch writes,
+  complete rollback, and successful retry after failure
 
 Not implemented yet:
 
-- An application service that processes complete updates and advances the cursor
 - Transaction versions, raw provider events, or stale-update protection
 - Pending-to-posted replacement
 - FastAPI, authentication, Plaid, or a dashboard
@@ -494,6 +495,7 @@ docs/lifecycles.md                Transaction lifecycle examples
 src/domain/models.py              Transaction, Removal, Posting, JournalEntry, State
 src/domain/invariants.py          Shared balance validation
 src/domain/ledger.py              Journal factories and state transitions
+src/application/synchronization.py Complete-update and cursor orchestration
 src/persistence/database.py       Engine and session-factory configuration
 src/persistence/models.py         SQLAlchemy persistence mappings
 src/persistence/repository.py     Atomic add, modify, and remove persistence
@@ -504,6 +506,7 @@ tests/domain/test_ledger.py       Posting, journal, and addition behavior
 tests/domain/test_models.py       Model invariants and immutable state
 tests/domain/test_reversals.py    Reversal behavior
 tests/domain/test_transitions.py  Modified and removed lifecycles
+tests/application/                Complete sync, race, rollback, and retry tests
 tests/persistence/                Database, trigger, repository, and rollback tests
 tests/providers/                  Provider contract, fixture, and pagination tests
 tests/scenarios/                  End-to-end in-memory feed scenarios
@@ -518,7 +521,8 @@ The current project is a deliberately bounded persistence checkpoint:
 - The same provider ID with different data is detectable, but Ledge cannot yet
   determine whether that data is newer or stale.
 - There is no provider event ID, transaction version, or applied-page history.
-- Sync cursors can be stored, but no service advances them with ledger changes yet.
+- The local service advances cursors atomically, but no real provider, webhook,
+  raw-event archive, or background worker invokes it yet.
 - Pending-to-posted replacement is documented but intentionally deferred.
 - `suspense:unclassified` is a neutral offset, not a categorization system.
 - There is one currency convention. User/account ownership exists in the schema,
@@ -563,9 +567,9 @@ identity and cursor processing must distinguish duplicate, newer, and stale data
 - [x] Normalized JSON fixtures loaded at the provider boundary
 - [x] Added, modified, removed, empty, and multi-page provider responses
 - [x] PostgreSQL sync-state schema with an initial nullable cursor
-- [ ] Synchronization service that applies a complete update
-- [ ] Cursor state committed with transaction changes
-- [ ] Retry after an injected synchronization failure
+- [x] Synchronization service that applies a complete update
+- [x] Cursor state committed with transaction changes
+- [x] Retry after an injected synchronization failure
 - [ ] Pending-to-posted fixtures once the base sync pipeline works
 
 ### 4. Local FastAPI application
@@ -670,7 +674,7 @@ they have been measured and the test setup is documented.
 - `docs/invariants.md` - correctness requirements and sign conventions
 - `docs/lifecycles.md` - modification, removal, and future pending lifecycles
 
-The immediate next task is the synchronization service that uses the durable
-cursor. Do not add FastAPI, Plaid, or AWS until provider-style pages can apply
-added, modified, and removed events atomically and tests prove failures leave no
-partial ledger or cursor state.
+The local fake-provider pipeline now applies added, modified, and removed events
+atomically and proves failures leave no partial ledger or cursor state. The next
+design checkpoint is pending-to-posted replacement and stale-update identity
+before connecting FastAPI, Plaid, or AWS delivery infrastructure.

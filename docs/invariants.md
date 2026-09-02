@@ -68,12 +68,13 @@ credits the card liability while the expense is debited.
 - Each `(provider_name, provider_connection_id)` identifies at most one durable
   sync stream and belongs to one Ledge user. Its cursor may be null only to
   represent a stream that has not completed an initial synchronization.
+- A complete fake-provider update and its final cursor share one database
+  transaction. The coordinator detects cursor races, rejects pagination loops,
+  rolls failed batches back completely, and can retry from the unchanged cursor.
 
 ## Planned enforcement
 
 - Provider event IDs and transaction versions will distinguish duplicate, newer,
   and stale updates; version-aware idempotency is not implemented yet.
-- A complete fetched update and its final cursor will share one database
-  transaction; the schema can store the cursor, but orchestration is still planned.
 - Authentication and user-scoped query services will enforce ownership at the API
   boundary; the relational schema already enforces user/account ownership.

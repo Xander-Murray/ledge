@@ -110,10 +110,16 @@ globally unique and owned by one Ledge user. A `NULL` cursor means the connectio
 has not completed its first synchronization; a non-null cursor is the last
 successfully committed provider bookmark.
 
-The table exists, but no service advances its cursor yet. The next application
-checkpoint will fetch all available provider pages, lock the sync-state row,
-recheck its starting cursor, apply every ledger change, and store the final cursor
-inside one database transaction.
+`TransactionSynchronizer` reads the starting cursor, fetches all available pages
+without holding a database lock, then opens one write transaction. It locks and
+rechecks the sync-state row, applies every change through `LedgerRepository`, and
+stores the final cursor before commit. A changed cursor rejects the stale fetched
+batch instead of allowing two workers to apply overlapping updates.
+
+```text
+stored cursor -> fetch every page -> lock and recheck cursor
+              -> add / modify / remove -> store final cursor -> commit
+```
 
 ## Current transaction boundary
 
@@ -135,7 +141,7 @@ Integration tests inject failure after draft rows have been flushed but before
 sealing. They verify that additions leave no partial rows and removals retain the
 original active projection without a partial reversal.
 
-## Future synchronization boundary
+## Current synchronization boundary
 
 A sync run will start from the stored cursor and fetch every currently available
 provider page before opening its write transaction. It will then lock and recheck
@@ -146,4 +152,6 @@ If provider data changes during pagination, the fetched batch must be discarded
 and pagination restarted from the original cursor. If processing fails while
 writing the batch, no partial journal writes or new cursor should become visible.
 Receiving a webhook twice must be harmless because at-least-once systems naturally
-produce duplicate deliveries.
+produce duplicate deliveries. The local fake-provider coordinator now enforces
+this database boundary; provider-specific pagination mutation errors will be
+handled when the Plaid adapter is introduced.

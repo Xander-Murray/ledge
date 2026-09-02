@@ -68,10 +68,10 @@ journal, not the obsolete original journal.
 
 ### Failure after the first change in a sync page
 
-**Status:** Repository rollback is proven for addition, modification, and removal;
-page and cursor state remain planned. The future page transaction will roll back
-journal rows, transaction versions, and cursor state together. A retry will begin
-from the old cursor and reapply the page.
+**Status:** Implemented for complete fake-provider updates. The coordinator fetches
+every page, then writes all ledger changes and the final cursor in one transaction.
+An injected mid-batch failure leaves the old cursor and no partial journals; a
+following retry from that cursor succeeds.
 
 ### Duplicate delivery
 
