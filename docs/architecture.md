@@ -14,9 +14,9 @@ pending-to-posted activity into an auditable double-entry ledger. Later phases
 add recurring-charge detection, a 30-day projection, and a transparent
 safe-to-spend estimate.
 
-The first milestone focuses on domain models, ledger operations, PostgreSQL
-persistence, migrations, and automated tests. Provider payloads will be translated
-into Ledge's own domain types at the boundary.
+The first milestone established domain models, ledger operations, PostgreSQL
+persistence, migrations, and automated tests. The current milestone is exposing
+those capabilities through a small FastAPI boundary before adding Plaid or AWS.
 
 ## Current checkpoint non-goals
 
@@ -70,11 +70,11 @@ PostgreSQL constraints, triggers, and migrations
 ```
 
 Starting with pure functions keeps accounting rules easy to understand and test.
-The implemented repository persists additions, modifications, and removals
-without making the domain depend on SQLAlchemy. It keeps the current provider
-projection in `external_transactions` and appends balanced, sealed history to
-`journal_entries` and `postings`. Plaid, AWS, FastAPI, and React remain later
-phases.
+The implemented repository persists additions, modifications, removals, and
+pending-to-posted replacements without making the domain depend on SQLAlchemy.
+It keeps the current provider projection in `external_transactions` and appends
+balanced, sealed history to `journal_entries` and `postings`. Plaid, AWS, and
+React remain later phases.
 
 ## Current provider boundary
 
@@ -117,17 +117,18 @@ stores the final cursor before commit. A changed cursor rejects the stale fetche
 batch instead of allowing two workers to apply overlapping updates.
 
 ```text
-stored cursor -> fetch every page -> lock and recheck cursor
-              -> add / modify / remove -> store final cursor -> commit
+stored cursor -> fetch every page -> identify pending replacements
+              -> lock and recheck cursor -> apply lifecycle changes
+              -> store final cursor -> commit
 ```
 
 ## Current transaction boundary
 
 The caller opens a SQLAlchemy transaction and passes its session to the
 repository. Repository methods may `flush()` SQL so PostgreSQL constraints and
-triggers run, but they do not commit. A successful addition, modification, or
-removal is committed by the caller; an exception rolls back its projection,
-journals, and postings together.
+triggers run, but they do not commit. A successful addition, modification,
+removal, or pending replacement is committed by the caller; an exception rolls
+back its projection, journals, and postings together.
 
 Addition is sequentially idempotent by `(user_id, provider_transaction_id)`.
 Identical redelivery returns the existing Ledge UUID without new journal effects;
@@ -136,6 +137,12 @@ current projection, reconstructs its one active journal, appends a reversal and
 replacement, updates the projection, and seals both new journals atomically.
 Removal uses the same locked active-journal lookup, appends its reversal, and
 marks the projection removed. An identical repeated removal is a no-op.
+
+Pending replacement locks the pending projection, reverses its active journal,
+creates a separately identified posted projection and journal, and marks the
+pending projection replaced. The posted row retains the provider-supplied pending
+reference, and a unique database constraint prevents two posted rows from
+claiming the same pending transaction.
 
 Integration tests inject failure after draft rows have been flushed but before
 sealing. They verify that additions leave no partial rows and removals retain the
@@ -152,6 +159,26 @@ If provider data changes during pagination, the fetched batch must be discarded
 and pagination restarted from the original cursor. If processing fails while
 writing the batch, no partial journal writes or new cursor should become visible.
 Receiving a webhook twice must be harmless because at-least-once systems naturally
-produce duplicate deliveries. The local fake-provider coordinator now enforces
+produce duplicate deliveries. Pending replacement links and pending removals may
+arrive on separate pages, so the coordinator examines the complete fetched update
+before applying either event. The local fake-provider coordinator now enforces
 this database boundary; provider-specific pagination mutation errors will be
 handled when the Plaid adapter is introduced.
+
+## Current HTTP boundary
+
+```text
+Uvicorn -> FastAPI application factory -> async request session
+                                      -> SELECT 1 -> PostgreSQL
+```
+
+The application factory creates an async SQLAlchemy engine when one is not
+injected and disposes its connection pool during FastAPI shutdown. Each request
+receives a short-lived async session through dependency injection. The existing
+synchronous engine and repository remain the write path for synchronization;
+the HTTP layer uses async sessions so database waits do not block the event loop.
+
+`GET /health` is the first endpoint. It returns `200` only after PostgreSQL
+answers a readiness query and maps SQLAlchemy failures to `503` without exposing
+connection details. Unit tests replace the session factory at this boundary, and
+an integration test executes the same route against `ledge_test`.

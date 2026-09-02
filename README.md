@@ -21,8 +21,9 @@ visible and give it a concrete consumer use case.
 ## Project status
 
 Ledge currently has a tested pure-Python domain layer, reproducible PostgreSQL
-persistence, and a local synchronization application service. Complete fake
-provider updates now commit ledger changes and cursor advancement atomically.
+persistence, a local synchronization application service, and the foundation of
+a FastAPI HTTP interface. Complete fake-provider updates commit ledger changes
+and cursor advancement atomically, including pending-to-posted replacement.
 
 Implemented now:
 
@@ -33,12 +34,13 @@ Implemented now:
 - Duplicate-safe transaction additions
 - Transaction modification through reversal and replacement
 - Transaction removal through reversal without erasing audit history
+- Pending-to-posted replacement without double-counting either transaction
 - Explicit conflict, missing-transaction, and invalid-state errors
 - Unit, lifecycle, and complete feed-scenario tests
 - Docker Compose PostgreSQL development and test databases
 - SQLAlchemy mappings for users, financial accounts, external transactions,
   journal entries, and postings
-- Five Alembic migrations that build and remove the complete current schema
+- Six Alembic migrations that build and remove the complete current schema
 - Database-enforced journal sealing, minimum posting count, zero balance, and
   immutability after sealing
 - Real PostgreSQL integration coverage for connection, migration round trips,
@@ -55,12 +57,15 @@ Implemented now:
 - Durable per-user provider-connection sync state with a nullable initial cursor
 - Multi-page synchronization with cursor race detection, atomic batch writes,
   complete rollback, and successful retry after failure
+- FastAPI application factory with an async SQLAlchemy request boundary
+- Database-backed `GET /health` readiness endpoint with explicit `503` behavior
+- API coverage using isolated ASGI tests and real PostgreSQL
 
 Not implemented yet:
 
 - Transaction versions, raw provider events, or stale-update protection
-- Pending-to-posted replacement
-- FastAPI, authentication, Plaid, or a dashboard
+- Account, transaction, and sync-status API endpoints
+- Authentication, Plaid, or a dashboard
 - S3, SQS, Lambda, EC2, a dead-letter queue, or CloudWatch telemetry
 
 This boundary is intentional. The financial rules and durable database
@@ -105,6 +110,8 @@ provider transaction ID: txn-123
 financial account ID:    checking-1
 amount:                  1250 cents
 description:             Neighborhood Market
+pending:                 true or false
+pending transaction ID:  optional link from posted to pending
 ```
 
 Provider transaction IDs are used to detect duplicate delivery. The provider
@@ -161,7 +168,8 @@ immutable: corrections append new entries instead of rewriting history.
 LedgerState
 ├── transactions_by_provider_id
 ├── journal_entries
-└── removed_provider_transaction_ids
+├── removed_provider_transaction_ids
+└── replaced_provider_transaction_ids
 ```
 
 The transaction mapping answers what the provider currently says. Journal entries
@@ -169,8 +177,8 @@ answer how Ledge reached that state. Removed IDs remain linked to their original
 transactions so deletion does not erase history.
 
 `LedgerState` remains a learning and testing model. PostgreSQL is now the durable
-state for repository-managed additions, modifications, and removals, so persistence code
-queries the relevant records instead of loading one enormous state object.
+state for repository-managed lifecycle operations, so persistence code queries
+the relevant records instead of loading one enormous state object.
 
 ## Current state transitions
 
@@ -229,6 +237,25 @@ removed IDs: includes the provider transaction ID
 
 The net financial effect becomes zero while the audit history remains. A repeated
 removal is harmless and does not create a second reversal.
+
+### Pending becomes posted
+
+A pending authorization and its final posted transaction have different provider
+IDs. The posted transaction links back to the pending one:
+
+```text
+Pending $20 authorization
+-> original pending journal
+
+Posted $23 charge references the pending ID
+-> reverse the $20 pending journal
+-> append the $23 posted journal
+-> mark pending projection replaced; keep posted projection active
+```
+
+Both provider records and all three journal entries remain for audit, while the
+net current effect is only $23. If the provider also reports the pending ID as
+removed, synchronization consumes that removal without creating another reversal.
 
 ### Reversal versus refund
 
@@ -314,7 +341,9 @@ PostgreSQL 16
 
 Alembic installs the schema, constraints, and sealing triggers.
 `LedgerRepository` connects domain journals to PostgreSQL for additions,
-modifications, and removals.
+modifications, removals, and pending replacements.
+
+FastAPI -> async SQLAlchemy session -> PostgreSQL readiness query
 ```
 
 The domain has no imports from a web framework, ORM, cloud SDK, or provider SDK.
@@ -372,8 +401,9 @@ transactions_by_provider_id     -> external_transactions
 journal_entries                 -> journal_entries
 JournalEntry.postings           -> postings
 removed transaction IDs         -> transaction status/history
+replaced pending IDs             -> transaction status + posted-to-pending link
 future applied versions/events  -> transaction_versions / inbound_events
-future cursor                   -> sync_state
+cursor                           -> transaction_sync_states
 ```
 
 Journal entries use a draft-and-seal lifecycle:
@@ -390,13 +420,13 @@ The domain validates journal balance before persistence. PostgreSQL repeats this
 critical validation as the final durable-data boundary, including when a future
 bug or alternate writer bypasses the normal Python path.
 
-Applying an addition, modification, or removal through the repository follows:
+Applying a lifecycle operation through the repository follows:
 
 ```text
 Begin database transaction
 -> look up provider transaction identity and current projection
 -> insert or update the current provider projection
--> insert immutable journal entry or reversal
+-> insert immutable journal entry and/or reversal
 -> insert all balanced postings
 -> commit everything together
 ```
@@ -404,8 +434,8 @@ Begin database transaction
 If any step fails, PostgreSQL rolls back the entire operation. Repository tests
 inject failures between draft insertion and sealing and prove both that a failed
 addition leaves no rows and that a failed removal leaves the original transaction
-active without a partial reversal. Cursor updates will join this same transaction
-boundary when synchronization is implemented.
+active without a partial reversal. Synchronization places lifecycle writes and
+cursor advancement inside that same transaction boundary.
 
 The implemented persistence stack is:
 
@@ -417,6 +447,11 @@ The implemented persistence stack is:
 
 Pure domain functions remain independent. The repository calls their journal and
 reversal factories, then translates the results into SQLAlchemy models.
+
+The HTTP layer uses a separate async SQLAlchemy engine and one async session per
+request. This keeps network database I/O from blocking FastAPI's event loop while
+the existing synchronous repository remains available to the synchronization
+service and future Lambda worker.
 
 ## Development setup
 
@@ -469,6 +504,16 @@ Run database integration tests after PostgreSQL is healthy:
 venv/bin/pytest -m integration -vv
 ```
 
+Run the local API:
+
+```bash
+venv/bin/uvicorn api.app:create_app --factory --reload
+```
+
+`GET http://127.0.0.1:8000/health` returns `200` only when the API can execute a
+query against PostgreSQL. Database failures return `503` without exposing driver
+or connection details.
+
 Run coverage:
 
 ```bash
@@ -496,7 +541,10 @@ src/domain/models.py              Transaction, Removal, Posting, JournalEntry, S
 src/domain/invariants.py          Shared balance validation
 src/domain/ledger.py              Journal factories and state transitions
 src/application/synchronization.py Complete-update and cursor orchestration
-src/persistence/database.py       Engine and session-factory configuration
+src/api/app.py                    FastAPI application and resource lifetime
+src/api/dependencies.py           Per-request async database sessions
+src/api/health.py                 Database-backed readiness endpoint
+src/persistence/database.py       Sync and async engine/session configuration
 src/persistence/models.py         SQLAlchemy persistence mappings
 src/persistence/repository.py     Atomic add, modify, and remove persistence
 src/providers/base.py             Provider-independent page and protocol contracts
@@ -506,6 +554,8 @@ tests/domain/test_ledger.py       Posting, journal, and addition behavior
 tests/domain/test_models.py       Model invariants and immutable state
 tests/domain/test_reversals.py    Reversal behavior
 tests/domain/test_transitions.py  Modified and removed lifecycles
+tests/domain/test_pending_replacement.py Pending-to-posted lifecycle
+tests/api/                         ASGI and PostgreSQL API behavior
 tests/application/                Complete sync, race, rollback, and retry tests
 tests/persistence/                Database, trigger, repository, and rollback tests
 tests/providers/                  Provider contract, fixture, and pagination tests
@@ -514,20 +564,22 @@ tests/scenarios/                  End-to-end in-memory feed scenarios
 
 ## Known limitations
 
-The current project is a deliberately bounded persistence checkpoint:
+The current project is a deliberately bounded local API checkpoint:
 
-- Persisted addition, modification, and removal have success, idempotency, invalid
-  input or state, and rollback coverage appropriate to each operation.
+- Persisted lifecycle operations have success, idempotency, invalid input or
+  state, and rollback coverage appropriate to each operation.
 - The same provider ID with different data is detectable, but Ledge cannot yet
   determine whether that data is newer or stale.
 - There is no provider event ID, transaction version, or applied-page history.
 - The local service advances cursors atomically, but no real provider, webhook,
   raw-event archive, or background worker invokes it yet.
-- Pending-to-posted replacement is documented but intentionally deferred.
+- Pending matching requires the provider-supplied pending transaction reference;
+  Ledge does not guess matches from amount, date, or merchant text.
 - `suspense:unclassified` is a neutral offset, not a categorization system.
 - There is one currency convention. User/account ownership exists in the schema,
   but authentication and user-scoped query services do not.
-- There is no API, authentication, webhook verification, or secret storage.
+- The API currently exposes readiness only. It has no resource queries,
+  authentication, webhook verification, or secret storage.
 
 The most important current limitation is event ordering. If Ledge stores version
 3 of a transaction and later receives an old version 2 payload, it only sees
@@ -559,6 +611,7 @@ identity and cursor processing must distinguish duplicate, newer, and stale data
 - [x] Persisted removal with duplicate, conflict, and rollback coverage
 - [x] Complete persisted-modification edge-case and rollback coverage
 - [x] Durable provider-connection sync state and cursor storage
+- [x] Pending-to-posted schema and atomic repository replacement
 - [ ] Provider transaction versions and stale-update protection
 
 ### 3. Fake provider synchronization
@@ -570,15 +623,19 @@ identity and cursor processing must distinguish duplicate, newer, and stale data
 - [x] Synchronization service that applies a complete update
 - [x] Cursor state committed with transaction changes
 - [x] Retry after an injected synchronization failure
-- [ ] Pending-to-posted fixtures once the base sync pipeline works
+- [x] Pending-to-posted fixtures spanning multiple provider pages
+- [x] Pending removal consumed without a duplicate reversal
 
-### 4. Local FastAPI application
+### 4. Local FastAPI application - in progress
 
-- Webhook acceptance endpoint
-- Account, transaction, and sync-status read endpoints
-- Explicit request and response schemas
-- Fast webhook response independent of synchronization duration
-- User ownership enforcement before multi-user reads
+- [x] Application factory and explicit database dependency wiring
+- [x] Async SQLAlchemy session lifecycle for HTTP requests
+- [x] Database-backed health endpoint with `200` and `503` behavior
+- [ ] Webhook acceptance endpoint
+- [ ] Account, transaction, and sync-status read endpoints
+- [ ] Explicit request and response schemas
+- [ ] Fast webhook response independent of synchronization duration
+- [ ] User ownership enforcement before multi-user reads
 
 ### 5. Plaid Sandbox
 
@@ -672,9 +729,9 @@ they have been measured and the test setup is documented.
 
 - `docs/architecture.md` - architecture boundaries and transaction flow
 - `docs/invariants.md` - correctness requirements and sign conventions
-- `docs/lifecycles.md` - modification, removal, and future pending lifecycles
+- `docs/lifecycles.md` - modification, removal, and pending lifecycles
 
-The local fake-provider pipeline now applies added, modified, and removed events
-atomically and proves failures leave no partial ledger or cursor state. The next
-design checkpoint is pending-to-posted replacement and stale-update identity
-before connecting FastAPI, Plaid, or AWS delivery infrastructure.
+The local fake-provider pipeline now applies added, modified, removed, and
+pending-to-posted events atomically and proves failures leave no partial ledger
+or cursor state. FastAPI now exposes a database-backed readiness boundary. The
+next API checkpoint is a user-scoped account read endpoint.

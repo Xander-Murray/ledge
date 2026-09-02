@@ -24,6 +24,8 @@ of them must be rejected or rolled back.
    another user's financial data.
 10. **Raw provider events are retained.** Exact payloads are kept for diagnosis
     and controlled replay.
+11. **A pending transaction has at most one posted replacement.** The pending
+    effect is reversed once, and the posted effect becomes the active truth.
 
 ## Sign conventions
 
@@ -65,12 +67,17 @@ credits the card liability while the expense is debited.
   supply, verifies the account against the stored projection, appends one reversal
   of the active journal, and atomically marks the projection removed. Identical
   redelivery creates no new history.
+- Persisted pending replacement keeps both provider identities, links the posted
+  row to its pending source, reverses the pending journal exactly once, and writes
+  the posted journal in the same transaction. PostgreSQL prevents two posted rows
+  from claiming one pending identity.
 - Each `(provider_name, provider_connection_id)` identifies at most one durable
   sync stream and belongs to one Ledge user. Its cursor may be null only to
   represent a stream that has not completed an initial synchronization.
 - A complete fake-provider update and its final cursor share one database
   transaction. The coordinator detects cursor races, rejects pagination loops,
-  rolls failed batches back completely, and can retry from the unchanged cursor.
+  rolls failed batches back completely, matches pending replacements across page
+  boundaries, and can retry from the unchanged cursor.
 
 ## Planned enforcement
 

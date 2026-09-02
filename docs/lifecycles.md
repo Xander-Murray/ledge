@@ -1,24 +1,32 @@
 # Transaction lifecycles
 
-These examples describe current and planned lifecycle behavior. The pure domain
-supports addition, modification, and removal. PostgreSQL persistence currently
-supports all three; provider versions are still planned.
+These examples describe current and planned lifecycle behavior. The pure domain,
+PostgreSQL repository, and fake-provider synchronization support addition,
+modification, removal, and pending-to-posted replacement. Provider versions are
+still planned.
 
 ## Pending purchase becomes posted
 
-**Status:** Planned after the base provider synchronization pipeline.
+**Status:** Implemented through the fake-provider synchronization pipeline.
 
 ```text
 pending `pending-1` v1 added for 2,000 cents
   -> purchase journal: suspense +2000 / financial account -2000
 posted `posted-1` v1 arrives with pending_transaction_id=`pending-1`
   -> reversal linked to pending purchase: suspense -2000 / account +2000
-  -> posted journal: suspense +2000 / account -2000
+  -> posted journal: suspense +2300 / account -2300
   -> pending transaction marked replaced by `posted-1`
 ```
 
 The history contains three balanced entries, while the net consumer effect is one
-$20 purchase.
+$23 purchase. Both provider rows remain: the pending projection is `replaced` and
+the posted projection is `active`.
+
+The posted addition and pending removal may be delivered on different pages of
+one provider update. Ledge fetches every page before writing, recognizes the
+posted transaction's pending reference, and performs one reversal. The separate
+removal is consumed as part of that replacement. Repeating the replacement
+returns the same result without appending more journal entries.
 
 ## Posted amount changes
 
@@ -75,9 +83,10 @@ following retry from that cursor succeeds.
 
 ### Duplicate delivery
 
-**Status:** Sequential duplicate additions, modifications, and removals are
-implemented. An identical payload returns the existing external transaction ID
-without another journal; conflicting data is rejected where the event contract
+**Status:** Sequential duplicate additions, modifications, removals, and pending
+replacements are implemented. An identical payload returns the existing external
+transaction ID without another journal; conflicting data is rejected where the
+event contract
 requires an exact match. Concurrent missing-row races and event/version identities
 remain future boundaries, with the database uniqueness constraint providing final
 provider-identity protection today.
