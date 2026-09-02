@@ -80,6 +80,10 @@ def _parse_transaction(raw_transaction: object) -> Transaction:
         provider_transaction_id=raw_transaction["provider_transaction_id"],
         amount_cents=raw_transaction["amount_cents"],
         description=raw_transaction["description"],
+        is_pending=raw_transaction.get("is_pending", False),
+        pending_provider_transaction_id=raw_transaction.get(
+            "pending_provider_transaction_id"
+        ),
     )
 
 

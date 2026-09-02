@@ -62,6 +62,12 @@ class TransactionSynchronizer:
         )
         pages = self._fetch_all_pages(starting_cursor)
         ending_cursor = pages[-1].next_cursor
+        replaced_pending_ids = {
+            transaction.pending_provider_transaction_id
+            for page in pages
+            for transaction in page.added
+            if transaction.pending_provider_transaction_id is not None
+        }
 
         with self._session_factory() as session, session.begin():
             sync_state = session.scalar(
@@ -89,20 +95,29 @@ class TransactionSynchronizer:
             repository = LedgerRepository(session)
             for page in pages:
                 for transaction in page.added:
-                    repository.add_transaction(
-                        user_id=user_id,
-                        transaction=transaction,
-                    )
+                    if transaction.pending_provider_transaction_id is None:
+                        repository.add_transaction(
+                            user_id=user_id,
+                            transaction=transaction,
+                        )
+                    else:
+                        repository.replace_pending_transaction(
+                            user_id=user_id,
+                            posted_transaction=transaction,
+                        )
                 for transaction in page.modified:
                     repository.modify_transaction(
                         user_id=user_id,
                         transaction=transaction,
                     )
                 for removal in page.removed:
-                    repository.remove_transaction(
-                        user_id=user_id,
-                        removal=removal,
-                    )
+                    # A provider also reports the old pending ID as removed. Its
+                    # reversal was already written by the replacement operation.
+                    if removal.provider_transaction_id not in replaced_pending_ids:
+                        repository.remove_transaction(
+                            user_id=user_id,
+                            removal=removal,
+                        )
 
             sync_state.cursor = ending_cursor
             session.flush()

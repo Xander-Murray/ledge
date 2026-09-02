@@ -1,0 +1,56 @@
+[
+  {
+    "request_cursor": null,
+    "added": [
+      {
+        "account_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "provider_transaction_id": "pending-restaurant",
+        "amount_cents": 2000,
+        "description": "Corner Cafe",
+        "is_pending": true
+      }
+    ],
+    "modified": [],
+    "removed": [],
+    "next_cursor": "pending-cursor",
+    "has_more": false
+  },
+  {
+    "request_cursor": "pending-cursor",
+    "added": [
+      {
+        "account_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "provider_transaction_id": "posted-restaurant",
+        "amount_cents": 2300,
+        "description": "Corner Cafe with tip",
+        "is_pending": false,
+        "pending_provider_transaction_id": "pending-restaurant"
+      }
+    ],
+    "modified": [],
+    "removed": [],
+    "next_cursor": "posting-page-2",
+    "has_more": true
+  },
+  {
+    "request_cursor": "posting-page-2",
+    "added": [],
+    "modified": [],
+    "removed": [
+      {
+        "account_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "provider_transaction_id": "pending-restaurant"
+      }
+    ],
+    "next_cursor": "posted-cursor",
+    "has_more": false
+  },
+  {
+    "request_cursor": "posted-cursor",
+    "added": [],
+    "modified": [],
+    "removed": [],
+    "next_cursor": "posted-cursor",
+    "has_more": false
+  }
+]

@@ -51,6 +51,24 @@ def test_fake_provider_returns_empty_page_at_current_cursor() -> None:
     assert page.has_more is False
 
 
+def test_fake_provider_parses_pending_replacement_fields() -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures"
+        / "providers"
+        / "pending_transaction_sync_pages.json"
+    )
+    provider = FakeTransactionProvider.from_json(fixture_path)
+
+    pending = provider.fetch_transaction_updates(None).added[0]
+    posted = provider.fetch_transaction_updates("pending-cursor").added[0]
+
+    assert pending.is_pending is True
+    assert pending.pending_provider_transaction_id is None
+    assert posted.is_pending is False
+    assert posted.pending_provider_transaction_id == "pending-restaurant"
+
+
 def test_fake_provider_rejects_unknown_cursor() -> None:
     provider = FakeTransactionProvider.from_json(FIXTURE_PATH)
 

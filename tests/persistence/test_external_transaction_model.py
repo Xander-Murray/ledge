@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKeyConstraint,
@@ -23,12 +24,19 @@ def test_external_transaction_has_required_current_projection_fields() -> None:
         "provider_transaction_id",
         "amount_cents",
         "description",
+        "is_pending",
+        "pending_provider_transaction_id",
         "status",
         "created_at",
         "updated_at",
     }
     assert isinstance(columns.provider_transaction_id.type, String)
     assert isinstance(columns.amount_cents.type, BigInteger)
+    assert isinstance(columns.is_pending.type, Boolean)
+    assert isinstance(columns.pending_provider_transaction_id.type, String)
+    assert columns.is_pending.nullable is False
+    assert columns.is_pending.server_default is not None
+    assert columns.pending_provider_transaction_id.nullable is True
     assert isinstance(columns.status.type, String)
     assert columns.status.server_default is not None
 
@@ -69,15 +77,28 @@ def test_external_transaction_enforces_ownership_and_provider_identity() -> None
         if isinstance(constraint, UniqueConstraint)
     }
 
-    assert len(foreign_keys) == 1
-    assert tuple(element.target_fullname for element in foreign_keys[0].elements) == (
-        "financial_accounts.id",
-        "financial_accounts.user_id",
+    foreign_key_targets = {
+        tuple(element.target_fullname for element in constraint.elements): constraint
+        for constraint in foreign_keys
+    }
+
+    assert set(foreign_key_targets) == {
+        ("financial_accounts.id", "financial_accounts.user_id"),
+        (
+            "external_transactions.user_id",
+            "external_transactions.provider_transaction_id",
+        ),
+    }
+    assert all(
+        constraint.ondelete == "RESTRICT" for constraint in foreign_key_targets.values()
     )
-    assert foreign_keys[0].ondelete == "RESTRICT"
     assert unique_constraints["uq_external_transactions_provider_identity"] == (
         "user_id",
         "provider_transaction_id",
+    )
+    assert unique_constraints["uq_external_transactions_pending_replacement"] == (
+        "user_id",
+        "pending_provider_transaction_id",
     )
 
 
@@ -89,6 +110,9 @@ def test_external_transaction_checks_status_and_provider_identity_values() -> No
     }
 
     assert check_names == {
+        "ck_external_transactions_not_self_pending_replacement",
+        "ck_external_transactions_only_pending_can_be_replaced",
+        "ck_external_transactions_pending_has_no_replacement_source",
         "ck_external_transactions_provider_id_nonempty",
         "ck_external_transactions_status",
     }

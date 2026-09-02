@@ -32,6 +32,12 @@ class LedgerRepository:
         or roll back. Return the Ledge-owned external transaction ID.
         """
 
+        if transaction.pending_provider_transaction_id is not None:
+            raise TransactionStateError(
+                f"Transaction {transaction.provider_transaction_id!r} must use the "
+                "pending replacement operation"
+            )
+
         external_transaction_id = uuid4()
         journal_entry = create_journal_entry(transaction, uuid4())
 
@@ -46,11 +52,8 @@ class LedgerRepository:
         )
 
         if existing_transaction is not None:
-            if (
-                existing_transaction.status == "active"
-                and existing_transaction.amount_cents == transaction.amount_cents
-                and existing_transaction.description == transaction.description
-                and existing_transaction.financial_account_id == transaction.account_id
+            if existing_transaction.status == "active" and self._matches_transaction(
+                existing_transaction, transaction
             ):
                 return existing_transaction.id
 
@@ -65,6 +68,10 @@ class LedgerRepository:
             provider_transaction_id=transaction.provider_transaction_id,
             amount_cents=transaction.amount_cents,
             description=transaction.description,
+            is_pending=transaction.is_pending,
+            pending_provider_transaction_id=(
+                transaction.pending_provider_transaction_id
+            ),
             status="active",
         )
 
@@ -111,16 +118,21 @@ class LedgerRepository:
             raise TransactionNotFoundError(
                 f"Transaction {transaction.provider_transaction_id!r} does not exist"
             )
-        if existing.status == "removed":
+        if existing.status != "active":
             raise TransactionStateError(
-                f"Removed transaction {transaction.provider_transaction_id!r} "
-                "cannot be modified"
+                f"Transaction {transaction.provider_transaction_id!r} with status "
+                f"{existing.status!r} cannot be modified"
             )
         if (
-            existing.financial_account_id == transaction.account_id
-            and existing.amount_cents == transaction.amount_cents
-            and existing.description == transaction.description
+            existing.is_pending != transaction.is_pending
+            or existing.pending_provider_transaction_id
+            != transaction.pending_provider_transaction_id
         ):
+            raise TransactionStateError(
+                f"Transaction {transaction.provider_transaction_id!r} "
+                "settlement identity cannot be modified"
+            )
+        if self._matches_transaction(existing, transaction):
             return existing.id
 
         active_domain = self._get_active_journal_entry(existing)
@@ -172,6 +184,8 @@ class LedgerRepository:
             )
         if existing.status == "removed":
             return existing.id
+        if existing.status == "replaced":
+            return existing.id
         if existing.status != "active":
             raise TransactionStateError(
                 f"Transaction {removal.provider_transaction_id!r} "
@@ -192,6 +206,93 @@ class LedgerRepository:
 
         return existing.id
 
+    def replace_pending_transaction(
+        self,
+        *,
+        user_id: UUID,
+        posted_transaction: Transaction,
+    ) -> UUID:
+        """Stage replacement of one pending transaction by its posted version."""
+        pending_provider_id = posted_transaction.pending_provider_transaction_id
+        if posted_transaction.is_pending or pending_provider_id is None:
+            raise TransactionStateError(
+                f"Transaction {posted_transaction.provider_transaction_id!r} "
+                "is not a posted replacement"
+            )
+
+        pending = self._load_transaction_for_update(
+            user_id=user_id,
+            provider_transaction_id=pending_provider_id,
+        )
+        existing_posted = self._load_transaction_for_update(
+            user_id=user_id,
+            provider_transaction_id=posted_transaction.provider_transaction_id,
+        )
+
+        if existing_posted is not None:
+            if (
+                pending is not None
+                and pending.status == "replaced"
+                and existing_posted.status == "active"
+                and self._matches_transaction(existing_posted, posted_transaction)
+            ):
+                return existing_posted.id
+            raise TransactionConflictError(
+                f"Transaction {posted_transaction.provider_transaction_id!r} "
+                "already exists with different state"
+            )
+        if pending is None:
+            raise TransactionNotFoundError(
+                f"Pending transaction {pending_provider_id!r} does not exist"
+            )
+        if pending.financial_account_id != posted_transaction.account_id:
+            raise TransactionConflictError(
+                f"Pending transaction {pending_provider_id!r} "
+                "belongs to a different account"
+            )
+        if not pending.is_pending:
+            raise TransactionStateError(
+                f"Transaction {pending_provider_id!r} is not pending"
+            )
+        if pending.status != "active":
+            raise TransactionStateError(
+                f"Pending transaction {pending_provider_id!r} with status "
+                f"{pending.status!r} cannot be replaced"
+            )
+
+        pending_domain = self._get_active_journal_entry(pending)
+        posted_transaction_id = uuid4()
+        reversal_model = self._stage_journal_entry(
+            external_transaction_id=pending.id,
+            journal_entry=create_reversal_entry(pending_domain, uuid4()),
+        )
+        posted_journal_model = self._stage_journal_entry(
+            external_transaction_id=posted_transaction_id,
+            journal_entry=create_journal_entry(posted_transaction, uuid4()),
+        )
+        self._session.add(
+            ExternalTransactionModel(
+                id=posted_transaction_id,
+                user_id=user_id,
+                financial_account_id=posted_transaction.account_id,
+                provider_transaction_id=(posted_transaction.provider_transaction_id),
+                amount_cents=posted_transaction.amount_cents,
+                description=posted_transaction.description,
+                is_pending=False,
+                pending_provider_transaction_id=pending_provider_id,
+                status="active",
+            )
+        )
+        pending.status = "replaced"
+        self._session.flush()
+
+        sealed_at = datetime.now(UTC)
+        reversal_model.sealed_at = sealed_at
+        posted_journal_model.sealed_at = sealed_at
+        self._session.flush()
+
+        return posted_transaction_id
+
     def _load_transaction_for_update(
         self,
         *,
@@ -211,6 +312,20 @@ class LedgerRepository:
                 )
             )
             .with_for_update()
+        )
+
+    @staticmethod
+    def _matches_transaction(
+        model: ExternalTransactionModel,
+        transaction: Transaction,
+    ) -> bool:
+        return (
+            model.financial_account_id == transaction.account_id
+            and model.amount_cents == transaction.amount_cents
+            and model.description == transaction.description
+            and model.is_pending == transaction.is_pending
+            and model.pending_provider_transaction_id
+            == transaction.pending_provider_transaction_id
         )
 
     @staticmethod

@@ -16,11 +16,24 @@ class Transaction:
     provider_transaction_id: str
     amount_cents: int
     description: str
+    is_pending: bool = False
+    pending_provider_transaction_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.provider_transaction_id.strip():
             raise ValueError("provider_transaction_id must not be empty")
         _validate_amount_cents(self.amount_cents)
+        if not isinstance(self.is_pending, bool):
+            raise TypeError("is_pending must be a boolean")
+        if self.pending_provider_transaction_id is not None:
+            if not self.pending_provider_transaction_id.strip():
+                raise ValueError("pending_provider_transaction_id must not be empty")
+            if self.pending_provider_transaction_id == self.provider_transaction_id:
+                raise ValueError("a transaction cannot replace itself")
+            if self.is_pending:
+                raise ValueError(
+                    "a pending transaction cannot replace another transaction"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,11 +86,13 @@ class LedgerState:
     transactions_by_provider_id: Mapping[str, Transaction]
     journal_entries: tuple[JournalEntry, ...]
     removed_provider_transaction_ids: frozenset[str] = frozenset()
+    replaced_provider_transaction_ids: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         transactions = dict(self.transactions_by_provider_id)
         journal_entries = tuple(self.journal_entries)
         removed_provider_ids = frozenset(self.removed_provider_transaction_ids)
+        replaced_provider_ids = frozenset(self.replaced_provider_transaction_ids)
         for provider_id, transaction in transactions.items():
             if provider_id != transaction.provider_transaction_id:
                 raise ValueError(
@@ -92,6 +107,47 @@ class LedgerState:
             raise ValueError(
                 "Removed transaction IDs must exist in the transaction map"
             )
+        unknown_replaced_ids = replaced_provider_ids.difference(transactions)
+        if unknown_replaced_ids:
+            raise ValueError(
+                "Replaced transaction IDs must exist in the transaction map"
+            )
+        if removed_provider_ids & replaced_provider_ids:
+            raise ValueError("A transaction cannot be both removed and replaced")
+        if any(
+            not transactions[provider_id].is_pending
+            for provider_id in replaced_provider_ids
+        ):
+            raise ValueError("Only pending transactions can be marked replaced")
+
+        replacement_sources = [
+            transaction.pending_provider_transaction_id
+            for transaction in transactions.values()
+            if transaction.pending_provider_transaction_id is not None
+        ]
+        if len(replacement_sources) != len(set(replacement_sources)):
+            raise ValueError("A pending transaction can have only one replacement")
+        if set(replacement_sources) != replaced_provider_ids:
+            raise ValueError(
+                "Replaced transaction IDs must match posted transaction links"
+            )
+        for transaction in transactions.values():
+            pending_id = transaction.pending_provider_transaction_id
+            if pending_id is None:
+                continue
+            pending_transaction = transactions.get(pending_id)
+            if pending_transaction is None:
+                raise ValueError(
+                    "A posted replacement must reference a known transaction"
+                )
+            if not pending_transaction.is_pending:
+                raise ValueError(
+                    "A posted replacement must reference a pending transaction"
+                )
+            if pending_transaction.account_id != transaction.account_id:
+                raise ValueError(
+                    "A posted replacement must use the pending transaction account"
+                )
 
         object.__setattr__(
             self,
@@ -103,6 +159,11 @@ class LedgerState:
             self,
             "removed_provider_transaction_ids",
             removed_provider_ids,
+        )
+        object.__setattr__(
+            self,
+            "replaced_provider_transaction_ids",
+            replaced_provider_ids,
         )
 
     @classmethod

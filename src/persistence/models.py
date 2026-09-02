@@ -5,6 +5,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -163,18 +164,44 @@ class ExternalTransactionModel(Base):
             name="provider_id_nonempty",
         ),
         CheckConstraint(
-            "status IN ('active', 'removed')",
+            "status IN ('active', 'removed', 'replaced')",
             name="status",
+        ),
+        CheckConstraint(
+            "NOT is_pending OR pending_provider_transaction_id IS NULL",
+            name="pending_has_no_replacement_source",
+        ),
+        CheckConstraint(
+            "pending_provider_transaction_id IS NULL "
+            "OR pending_provider_transaction_id <> provider_transaction_id",
+            name="not_self_pending_replacement",
+        ),
+        CheckConstraint(
+            "status <> 'replaced' OR is_pending",
+            name="only_pending_can_be_replaced",
         ),
         ForeignKeyConstraint(
             ["financial_account_id", "user_id"],
             ["financial_accounts.id", "financial_accounts.user_id"],
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["user_id", "pending_provider_transaction_id"],
+            [
+                "external_transactions.user_id",
+                "external_transactions.provider_transaction_id",
+            ],
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint(
             "user_id",
             "provider_transaction_id",
             name="uq_external_transactions_provider_identity",
+        ),
+        UniqueConstraint(
+            "user_id",
+            "pending_provider_transaction_id",
+            name="uq_external_transactions_pending_replacement",
         ),
     )
 
@@ -189,6 +216,14 @@ class ExternalTransactionModel(Base):
     amount_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
     description: Mapped[str] = mapped_column(nullable=False)
+
+    is_pending: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+    )
+
+    pending_provider_transaction_id: Mapped[str | None] = mapped_column(nullable=True)
 
     status: Mapped[str] = mapped_column(nullable=False, server_default="active")
 

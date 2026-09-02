@@ -864,3 +864,158 @@ def test_remove_transaction_rolls_back_status_and_reversal_when_sealing_fails(
         assert persisted_transaction.status == "active"
         assert session.scalar(select(func.count(JournalEntryModel.id))) == 1
         assert session.scalar(select(func.count(PostingModel.id))) == 2
+
+
+@pytest.mark.integration
+def test_replace_pending_transaction_preserves_history_and_posts_final_amount(
+    repository_database: RepositoryDatabase,
+) -> None:
+    pending = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="pending-restaurant",
+        amount_cents=2_000,
+        description="Corner Cafe",
+        is_pending=True,
+    )
+    posted = Transaction(
+        account_id=pending.account_id,
+        provider_transaction_id="posted-restaurant",
+        amount_cents=2_300,
+        description="Corner Cafe with tip",
+        pending_provider_transaction_id=pending.provider_transaction_id,
+    )
+
+    with Session(repository_database.engine) as session, session.begin():
+        pending_id = LedgerRepository(session).add_transaction(
+            user_id=repository_database.user_id,
+            transaction=pending,
+        )
+
+    with Session(repository_database.engine) as session, session.begin():
+        posted_id = LedgerRepository(session).replace_pending_transaction(
+            user_id=repository_database.user_id,
+            posted_transaction=posted,
+        )
+
+    with Session(repository_database.engine) as session:
+        transactions = {
+            transaction.provider_transaction_id: transaction
+            for transaction in session.scalars(select(ExternalTransactionModel))
+        }
+        pending_model = transactions[pending.provider_transaction_id]
+        posted_model = transactions[posted.provider_transaction_id]
+
+        assert pending_model.id == pending_id
+        assert pending_model.status == "replaced"
+        assert pending_model.is_pending is True
+        assert posted_model.id == posted_id
+        assert posted_model.status == "active"
+        assert posted_model.is_pending is False
+        assert (
+            posted_model.pending_provider_transaction_id
+            == pending.provider_transaction_id
+        )
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 3
+        assert session.scalar(select(func.count(PostingModel.id))) == 6
+        suspense_total = session.scalar(
+            select(func.sum(PostingModel.amount_cents)).where(
+                PostingModel.ledger_account == "suspense:unclassified"
+            )
+        )
+        assert suspense_total == 2_300
+
+
+@pytest.mark.integration
+def test_identical_pending_replacement_is_idempotent_in_repository(
+    repository_database: RepositoryDatabase,
+) -> None:
+    pending = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="pending-restaurant",
+        amount_cents=2_000,
+        description="Corner Cafe",
+        is_pending=True,
+    )
+    posted = Transaction(
+        account_id=pending.account_id,
+        provider_transaction_id="posted-restaurant",
+        amount_cents=2_300,
+        description="Corner Cafe with tip",
+        pending_provider_transaction_id=pending.provider_transaction_id,
+    )
+
+    with Session(repository_database.engine) as session, session.begin():
+        LedgerRepository(session).add_transaction(
+            user_id=repository_database.user_id,
+            transaction=pending,
+        )
+    with Session(repository_database.engine) as session, session.begin():
+        original_posted_id = LedgerRepository(session).replace_pending_transaction(
+            user_id=repository_database.user_id,
+            posted_transaction=posted,
+        )
+    with Session(repository_database.engine) as session, session.begin():
+        duplicate_posted_id = LedgerRepository(session).replace_pending_transaction(
+            user_id=repository_database.user_id,
+            posted_transaction=posted,
+        )
+
+    assert duplicate_posted_id == original_posted_id
+    with Session(repository_database.engine) as session:
+        assert session.scalar(select(func.count(ExternalTransactionModel.id))) == 2
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 3
+        assert session.scalar(select(func.count(PostingModel.id))) == 6
+
+
+@pytest.mark.integration
+def test_pending_replacement_rolls_back_when_sealing_fails(
+    repository_database: RepositoryDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pending = Transaction(
+        account_id=repository_database.financial_account_id,
+        provider_transaction_id="pending-restaurant",
+        amount_cents=2_000,
+        description="Corner Cafe",
+        is_pending=True,
+    )
+    posted = Transaction(
+        account_id=pending.account_id,
+        provider_transaction_id="posted-restaurant",
+        amount_cents=2_300,
+        description="Corner Cafe with tip",
+        pending_provider_transaction_id=pending.provider_transaction_id,
+    )
+
+    with Session(repository_database.engine) as session, session.begin():
+        pending_id = LedgerRepository(session).add_transaction(
+            user_id=repository_database.user_id,
+            transaction=pending,
+        )
+
+    with Session(repository_database.engine) as session:
+        real_flush = session.flush
+        flush_calls = 0
+
+        def fail_on_second_flush(objects: Sequence[Any] | None = None) -> None:
+            nonlocal flush_calls
+            flush_calls += 1
+            if flush_calls == 2:
+                raise InjectedPersistenceFailure("pending replacement sealing failed")
+            real_flush(objects)
+
+        monkeypatch.setattr(session, "flush", fail_on_second_flush)
+
+        with pytest.raises(InjectedPersistenceFailure), session.begin():
+            LedgerRepository(session).replace_pending_transaction(
+                user_id=repository_database.user_id,
+                posted_transaction=posted,
+            )
+
+    with Session(repository_database.engine) as session:
+        pending_model = session.get(ExternalTransactionModel, pending_id)
+        assert pending_model is not None
+        assert pending_model.status == "active"
+        assert session.scalar(select(func.count(ExternalTransactionModel.id))) == 1
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 1
+        assert session.scalar(select(func.count(PostingModel.id))) == 2

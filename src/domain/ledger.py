@@ -81,6 +81,11 @@ def apply_transaction_added(
     journal_entry_id: UUID,
 ) -> LedgerState:
     """Apply a new provider transaction to the ledger state."""
+    if transaction.pending_provider_transaction_id is not None:
+        raise TransactionStateError(
+            f"Transaction {transaction.provider_transaction_id!r} must use the "
+            "pending-to-posted transition"
+        )
     provider_id = transaction.provider_transaction_id
     existing_transaction = state.transactions_by_provider_id.get(provider_id)
 
@@ -93,6 +98,7 @@ def apply_transaction_added(
             transactions_by_provider_id=transactions,
             journal_entries=state.journal_entries + (journal_entry,),
             removed_provider_transaction_ids=state.removed_provider_transaction_ids,
+            replaced_provider_transaction_ids=state.replaced_provider_transaction_ids,
         )
 
     if existing_transaction == transaction:
@@ -120,6 +126,8 @@ def apply_transaction_removed(
         )
     if provider_id in state.removed_provider_transaction_ids:
         return state
+    if provider_id in state.replaced_provider_transaction_ids:
+        return state
 
     active_entry = _find_active_journal_entry(state, provider_id)
     reversal_entry = create_reversal_entry(active_entry, journal_entry_id)
@@ -130,6 +138,7 @@ def apply_transaction_removed(
         removed_provider_transaction_ids=(
             state.removed_provider_transaction_ids | {provider_id}
         ),
+        replaced_provider_transaction_ids=state.replaced_provider_transaction_ids,
     )
 
 
@@ -149,8 +158,20 @@ def apply_transaction_modified(
         raise TransactionStateError(
             f"Removed transaction {provider_id!r} cannot be modified"
         )
+    if provider_id in state.replaced_provider_transaction_ids:
+        raise TransactionStateError(
+            f"Replaced transaction {provider_id!r} cannot be modified"
+        )
     if existing_transaction == transaction:
         return state
+    if (
+        existing_transaction.is_pending != transaction.is_pending
+        or existing_transaction.pending_provider_transaction_id
+        != transaction.pending_provider_transaction_id
+    ):
+        raise TransactionStateError(
+            f"Transaction {provider_id!r} settlement identity cannot be modified"
+        )
 
     active_entry = _find_active_journal_entry(state, provider_id)
     reversal_entry = create_reversal_entry(active_entry, reversal_entry_id)
@@ -166,6 +187,67 @@ def apply_transaction_modified(
             replacement_entry,
         ),
         removed_provider_transaction_ids=state.removed_provider_transaction_ids,
+        replaced_provider_transaction_ids=state.replaced_provider_transaction_ids,
+    )
+
+
+def apply_pending_transaction_posted(
+    state: LedgerState,
+    posted_transaction: Transaction,
+    reversal_entry_id: UUID,
+    posted_entry_id: UUID,
+) -> LedgerState:
+    """Replace a pending transaction with its linked posted transaction."""
+    pending_id = posted_transaction.pending_provider_transaction_id
+    posted_id = posted_transaction.provider_transaction_id
+    if posted_transaction.is_pending or pending_id is None:
+        raise TransactionStateError(
+            f"Transaction {posted_id!r} is not a posted replacement"
+        )
+
+    existing_posted = state.transactions_by_provider_id.get(posted_id)
+    if existing_posted is not None:
+        if (
+            existing_posted == posted_transaction
+            and pending_id in state.replaced_provider_transaction_ids
+        ):
+            return state
+        raise TransactionConflictError(
+            f"Transaction {posted_id!r} already exists with different state"
+        )
+
+    pending_transaction = state.transactions_by_provider_id.get(pending_id)
+    if pending_transaction is None:
+        raise TransactionNotFoundError(
+            f"Pending transaction {pending_id!r} does not exist"
+        )
+    if pending_transaction.account_id != posted_transaction.account_id:
+        raise TransactionConflictError(
+            f"Pending transaction {pending_id!r} belongs to a different account"
+        )
+    if not pending_transaction.is_pending:
+        raise TransactionStateError(f"Transaction {pending_id!r} is not pending")
+    if (
+        pending_id in state.removed_provider_transaction_ids
+        or pending_id in state.replaced_provider_transaction_ids
+    ):
+        raise TransactionStateError(
+            f"Pending transaction {pending_id!r} is no longer active"
+        )
+
+    pending_entry = _find_active_journal_entry(state, pending_id)
+    reversal_entry = create_reversal_entry(pending_entry, reversal_entry_id)
+    posted_entry = create_journal_entry(posted_transaction, posted_entry_id)
+    transactions = dict(state.transactions_by_provider_id)
+    transactions[posted_id] = posted_transaction
+
+    return LedgerState(
+        transactions_by_provider_id=transactions,
+        journal_entries=state.journal_entries + (reversal_entry, posted_entry),
+        removed_provider_transaction_ids=state.removed_provider_transaction_ids,
+        replaced_provider_transaction_ids=(
+            state.replaced_provider_transaction_ids | {pending_id}
+        ),
     )
 
 

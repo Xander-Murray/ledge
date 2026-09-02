@@ -38,6 +38,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROVIDER_FIXTURE = (
     PROJECT_ROOT / "tests" / "fixtures" / "providers" / "transaction_sync_pages.json"
 )
+PENDING_PROVIDER_FIXTURE = (
+    PROJECT_ROOT
+    / "tests"
+    / "fixtures"
+    / "providers"
+    / "pending_transaction_sync_pages.json"
+)
 ACCOUNT_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 PROVIDER_NAME = "fake"
 PROVIDER_CONNECTION_ID = "connection-1"
@@ -374,3 +381,63 @@ def test_unknown_sync_state_is_rejected_before_provider_fetch(
         )
 
     assert provider.requested_cursors == []
+
+
+@pytest.mark.integration
+def test_pending_transaction_posts_across_provider_pages_atomically(
+    synchronization_database: SynchronizationDatabase,
+) -> None:
+    provider = FakeTransactionProvider.from_json(PENDING_PROVIDER_FIXTURE)
+    synchronizer = _synchronizer(synchronization_database, provider)
+
+    pending_result = _synchronize(
+        synchronizer,
+        synchronization_database.user_id,
+    )
+    posted_result = _synchronize(
+        synchronizer,
+        synchronization_database.user_id,
+    )
+
+    assert pending_result.ending_cursor == "pending-cursor"
+    assert posted_result.starting_cursor == "pending-cursor"
+    assert posted_result.ending_cursor == "posted-cursor"
+    assert posted_result.pages_fetched == 2
+    assert posted_result.added_count == 1
+    assert posted_result.removed_count == 1
+    assert provider.requested_cursors == [
+        None,
+        "pending-cursor",
+        "posting-page-2",
+    ]
+
+    with synchronization_database.session_factory() as session:
+        transactions = {
+            transaction.provider_transaction_id: transaction
+            for transaction in session.scalars(select(ExternalTransactionModel))
+        }
+        sync_state = session.get(
+            TransactionSyncStateModel,
+            synchronization_database.sync_state_id,
+        )
+
+        assert sync_state is not None
+        assert sync_state.cursor == "posted-cursor"
+        assert transactions["pending-restaurant"].status == "replaced"
+        assert transactions["pending-restaurant"].is_pending is True
+        assert transactions["posted-restaurant"].status == "active"
+        assert transactions["posted-restaurant"].is_pending is False
+        assert (
+            transactions["posted-restaurant"].pending_provider_transaction_id
+            == "pending-restaurant"
+        )
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 3
+        assert session.scalar(select(func.count(PostingModel.id))) == 6
+        assert (
+            session.scalar(
+                select(func.sum(PostingModel.amount_cents)).where(
+                    PostingModel.ledger_account == "suspense:unclassified"
+                )
+            )
+            == 2_300
+        )
