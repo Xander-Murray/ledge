@@ -4,6 +4,7 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
 from httpx2 import ASGITransport, AsyncClient
@@ -17,6 +18,8 @@ from persistence.database import (
     create_async_database_engine,
     create_async_session_factory,
 )
+
+USER_ID = UUID("11111111-1111-1111-1111-111111111111")
 
 
 def health_check_session_factory(*, available: bool = True) -> AsyncSessionFactory:
@@ -43,7 +46,10 @@ def anyio_backend() -> str:
 
 
 def test_application_exposes_metadata_without_opening_a_database_connection() -> None:
-    app = create_app(session_factory=health_check_session_factory())
+    app = create_app(
+        session_factory=health_check_session_factory(),
+        user_id=USER_ID,
+    )
 
     assert app.title == "Ledge API"
     assert app.version == "0.1.0"
@@ -51,7 +57,10 @@ def test_application_exposes_metadata_without_opening_a_database_connection() ->
 
 @pytest.mark.anyio
 async def test_health_reports_service_and_database_readiness() -> None:
-    app = create_app(session_factory=health_check_session_factory())
+    app = create_app(
+        session_factory=health_check_session_factory(),
+        user_id=USER_ID,
+    )
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -65,7 +74,10 @@ async def test_health_reports_service_and_database_readiness() -> None:
 
 @pytest.mark.anyio
 async def test_health_returns_service_unavailable_when_database_query_fails() -> None:
-    app = create_app(session_factory=health_check_session_factory(available=False))
+    app = create_app(
+        session_factory=health_check_session_factory(available=False),
+        user_id=USER_ID,
+    )
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -88,7 +100,10 @@ async def test_health_checks_real_postgresql() -> None:
         pytest.fail("API integration tests require a database ending in '_test'")
 
     engine = create_async_database_engine(database_url)
-    app = create_app(session_factory=create_async_session_factory(engine))
+    app = create_app(
+        session_factory=create_async_session_factory(engine),
+        user_id=USER_ID,
+    )
     try:
         async with AsyncClient(
             transport=ASGITransport(app=app),

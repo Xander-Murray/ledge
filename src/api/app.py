@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from uuid import UUID
 
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from api.accounts import router as accounts_router
+from api.config import get_configured_user_id
 from api.health import router as health_router
 from persistence.database import (
     AsyncSessionFactory,
@@ -18,12 +21,15 @@ from persistence.database import (
 def create_app(
     *,
     session_factory: AsyncSessionFactory | None = None,
+    user_id: UUID | None = None,
 ) -> FastAPI:
     """Build Ledge's HTTP application with explicit infrastructure wiring."""
     owned_engine: AsyncEngine | None = None
     if session_factory is None:
         owned_engine = create_async_database_engine(get_database_url())
         session_factory = create_async_session_factory(owned_engine)
+    if user_id is None:
+        user_id = get_configured_user_id()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -39,5 +45,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.session_factory = session_factory
+    app.state.user_id = user_id
     app.include_router(health_router)
+    app.include_router(accounts_router)
     return app
