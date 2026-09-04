@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from api.accounts import router as accounts_router
 from api.config import get_configured_user_id
 from api.health import router as health_router
+from api.transactions import router as transactions_router
 from persistence.database import (
     AsyncSessionFactory,
     create_async_database_engine,
@@ -48,4 +49,5 @@ def create_app(
     app.state.user_id = user_id
     app.include_router(health_router)
     app.include_router(accounts_router)
+    app.include_router(transactions_router)
     return app

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator, Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -18,7 +19,11 @@ from persistence.database import (
     create_async_database_engine,
     create_async_session_factory,
 )
-from persistence.models import FinancialAccountModel, UserModel
+from persistence.models import (
+    ExternalTransactionModel,
+    FinancialAccountModel,
+    UserModel,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 USER_ID = UUID("11111111-1111-1111-1111-111111111111")
@@ -27,6 +32,10 @@ EMPTY_USER_ID = UUID("33333333-3333-3333-3333-333333333333")
 CHECKING_ACCOUNT_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 SAVINGS_ACCOUNT_ID = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 OTHER_ACCOUNT_ID = UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+GROCERY_TRANSACTION_ID = UUID("10000000-0000-0000-0000-000000000001")
+PENDING_TRANSACTION_ID = UUID("10000000-0000-0000-0000-000000000002")
+REMOVED_TRANSACTION_ID = UUID("10000000-0000-0000-0000-000000000003")
+OTHER_TRANSACTION_ID = UUID("10000000-0000-0000-0000-000000000004")
 
 
 def _get_test_database_url() -> str:
@@ -83,6 +92,58 @@ def api_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
                     user_id=OTHER_USER_ID,
                     name="Someone Else's Account",
                     account_type="credit",
+                ),
+            ]
+        )
+        session.add_all(
+            [
+                ExternalTransactionModel(
+                    id=GROCERY_TRANSACTION_ID,
+                    user_id=USER_ID,
+                    financial_account_id=CHECKING_ACCOUNT_ID,
+                    provider_transaction_id="provider-grocery",
+                    amount_cents=4_299,
+                    description="Neighborhood Market",
+                    is_pending=False,
+                    status="active",
+                    created_at=datetime(2026, 9, 3, 12, tzinfo=UTC),
+                    updated_at=datetime(2026, 9, 3, 12, tzinfo=UTC),
+                ),
+                ExternalTransactionModel(
+                    id=PENDING_TRANSACTION_ID,
+                    user_id=USER_ID,
+                    financial_account_id=CHECKING_ACCOUNT_ID,
+                    provider_transaction_id="provider-coffee-pending",
+                    amount_cents=675,
+                    description="Coffee Shop",
+                    is_pending=True,
+                    status="active",
+                    created_at=datetime(2026, 9, 3, 13, tzinfo=UTC),
+                    updated_at=datetime(2026, 9, 3, 13, tzinfo=UTC),
+                ),
+                ExternalTransactionModel(
+                    id=REMOVED_TRANSACTION_ID,
+                    user_id=USER_ID,
+                    financial_account_id=SAVINGS_ACCOUNT_ID,
+                    provider_transaction_id="provider-removed",
+                    amount_cents=1_000,
+                    description="Removed Transfer",
+                    is_pending=False,
+                    status="removed",
+                    created_at=datetime(2026, 9, 3, 11, tzinfo=UTC),
+                    updated_at=datetime(2026, 9, 3, 11, tzinfo=UTC),
+                ),
+                ExternalTransactionModel(
+                    id=OTHER_TRANSACTION_ID,
+                    user_id=OTHER_USER_ID,
+                    financial_account_id=OTHER_ACCOUNT_ID,
+                    provider_transaction_id="provider-other-user",
+                    amount_cents=99_999,
+                    description="Private Transaction",
+                    is_pending=False,
+                    status="active",
+                    created_at=datetime(2026, 9, 3, 14, tzinfo=UTC),
+                    updated_at=datetime(2026, 9, 3, 14, tzinfo=UTC),
                 ),
             ]
         )
