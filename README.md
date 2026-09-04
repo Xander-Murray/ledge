@@ -21,9 +21,9 @@ visible and give it a concrete consumer use case.
 ## Project status
 
 Ledge currently has a tested pure-Python domain layer, reproducible PostgreSQL
-persistence, a local synchronization application service, and the foundation of
-a FastAPI HTTP interface. Complete fake-provider updates commit ledger changes
-and cursor advancement atomically, including pending-to-posted replacement.
+persistence, a local synchronization application service, and a user-scoped
+FastAPI read interface. Complete fake-provider updates commit ledger changes and
+cursor advancement atomically, including pending-to-posted replacement.
 
 Implemented now:
 
@@ -59,13 +59,18 @@ Implemented now:
   complete rollback, and successful retry after failure
 - FastAPI application factory with an async SQLAlchemy request boundary
 - Database-backed `GET /health` readiness endpoint with explicit `503` behavior
+- Configured single-user identity through `LEDGE_USER_ID`, kept injectable so
+  authentication can replace it later
+- User-scoped `GET /accounts`, `GET /transactions`, and `GET /sync-status`
+  endpoints with explicit response schemas
+- Account and status transaction filters plus bounded `limit`/`offset` pagination
 - API coverage using isolated ASGI tests and real PostgreSQL
 
 Not implemented yet:
 
 - Transaction versions, raw provider events, or stale-update protection
-- Account, transaction, and sync-status API endpoints
 - Authentication, Plaid, or a dashboard
+- A webhook write endpoint or background API-to-synchronizer handoff
 - S3, SQS, Lambda, EC2, a dead-letter queue, or CloudWatch telemetry
 
 This boundary is intentional. The financial rules and durable database
@@ -343,7 +348,8 @@ Alembic installs the schema, constraints, and sealing triggers.
 `LedgerRepository` connects domain journals to PostgreSQL for additions,
 modifications, removals, and pending replacements.
 
-FastAPI -> async SQLAlchemy session -> PostgreSQL readiness query
+FastAPI -> configured user identity -> async SQLAlchemy session
+        -> health, account, transaction, and sync-status queries -> PostgreSQL
 ```
 
 The domain has no imports from a web framework, ORM, cloud SDK, or provider SDK.
@@ -473,6 +479,8 @@ Start the local development and test databases:
 docker compose up -d postgres
 export LEDGE_DATABASE_URL='postgresql+psycopg://ledge:ledge_local@localhost:5432/ledge'
 export LEDGE_TEST_DATABASE_URL='postgresql+psycopg://ledge:ledge_local@localhost:5432/ledge_test'
+export LEDGE_USER_ID='11111111-1111-1111-1111-111111111111'
+venv/bin/alembic upgrade head
 ```
 
 The credentials in `compose.yaml` are local development values, not production
@@ -510,9 +518,35 @@ Run the local API:
 venv/bin/uvicorn api.app:create_app --factory --reload
 ```
 
-`GET http://127.0.0.1:8000/health` returns `200` only when the API can execute a
-query against PostgreSQL. Database failures return `503` without exposing driver
-or connection details.
+Available local routes:
+
+```text
+GET /health
+GET /accounts
+GET /transactions?account_id=<uuid>&status=<active|removed|replaced>&limit=50&offset=0
+GET /sync-status
+```
+
+`GET /health` returns `200` only when PostgreSQL answers its readiness query.
+The three resource endpoints read data only for `LEDGE_USER_ID`; they never return
+the stored `user_id`. Transaction results are newest first, support optional
+account and lifecycle-status filters, and reject pagination outside `limit=1..100`
+or `offset>=0`. Database failures return `503` without exposing driver or
+connection details. FastAPI also exposes interactive OpenAPI documentation at
+`http://127.0.0.1:8000/docs`.
+
+With Uvicorn running, exercise the routes from a second terminal:
+
+```bash
+curl -sS http://127.0.0.1:8000/health
+curl -sS http://127.0.0.1:8000/accounts
+curl -sS 'http://127.0.0.1:8000/transactions?status=active&limit=10&offset=0'
+curl -sS http://127.0.0.1:8000/sync-status
+```
+
+An empty `[]` from a resource endpoint is valid when the development database has
+not been populated for `LEDGE_USER_ID`. The PostgreSQL API integration tests seed
+isolated account, transaction, and sync-state rows and remove them afterward.
 
 Run coverage:
 
@@ -542,8 +576,12 @@ src/domain/invariants.py          Shared balance validation
 src/domain/ledger.py              Journal factories and state transitions
 src/application/synchronization.py Complete-update and cursor orchestration
 src/api/app.py                    FastAPI application and resource lifetime
-src/api/dependencies.py           Per-request async database sessions
+src/api/config.py                 Single-user API identity configuration
+src/api/dependencies.py           User identity and per-request async sessions
 src/api/health.py                 Database-backed readiness endpoint
+src/api/accounts.py               User-scoped account listing
+src/api/transactions.py           Filtered and paginated transaction listing
+src/api/sync_status.py            Provider-connection cursor visibility
 src/persistence/database.py       Sync and async engine/session configuration
 src/persistence/models.py         SQLAlchemy persistence mappings
 src/persistence/repository.py     Atomic add, modify, and remove persistence
@@ -576,10 +614,13 @@ The current project is a deliberately bounded local API checkpoint:
 - Pending matching requires the provider-supplied pending transaction reference;
   Ledge does not guess matches from amount, date, or merchant text.
 - `suspense:unclassified` is a neutral offset, not a categorization system.
-- There is one currency convention. User/account ownership exists in the schema,
-  but authentication and user-scoped query services do not.
-- The API currently exposes readiness only. It has no resource queries,
-  authentication, webhook verification, or secret storage.
+- There is one currency convention. User/account ownership exists in the schema
+  and read queries enforce it using one configured `LEDGE_USER_ID`, but there is
+  no authentication or request-specific identity yet.
+- The API is read-only. It has no webhook receiver, authentication, provider
+  verification, synchronization trigger, or secret storage.
+- Transaction reads expose the current provider projection, including removed and
+  replaced states; journal-history and calculated-balance endpoints do not exist.
 
 The most important current limitation is event ordering. If Ledge stores version
 3 of a transaction and later receives an old version 2 payload, it only sees
@@ -632,10 +673,11 @@ identity and cursor processing must distinguish duplicate, newer, and stale data
 - [x] Async SQLAlchemy session lifecycle for HTTP requests
 - [x] Database-backed health endpoint with `200` and `503` behavior
 - [ ] Webhook acceptance endpoint
-- [ ] Account, transaction, and sync-status read endpoints
-- [ ] Explicit request and response schemas
+- [x] Account, transaction, and sync-status read endpoints
+- [x] Explicit query validation and response schemas
 - [ ] Fast webhook response independent of synchronization duration
-- [ ] User ownership enforcement before multi-user reads
+- [x] Configured-user ownership enforcement for all resource reads
+- [ ] Authentication-backed request identity for a future multi-user product
 
 ### 5. Plaid Sandbox
 
@@ -730,8 +772,12 @@ they have been measured and the test setup is documented.
 - `docs/architecture.md` - architecture boundaries and transaction flow
 - `docs/invariants.md` - correctness requirements and sign conventions
 - `docs/lifecycles.md` - modification, removal, and pending lifecycles
+- `docs/database-diagram.html` - rendered visual map of the codebase, database,
+  API, tests, and roadmap
 
-The local fake-provider pipeline now applies added, modified, removed, and
+The local fake-provider pipeline applies added, modified, removed, and
 pending-to-posted events atomically and proves failures leave no partial ledger
-or cursor state. FastAPI now exposes a database-backed readiness boundary. The
-next API checkpoint is a user-scoped account read endpoint.
+or cursor state. FastAPI now exposes health, accounts, current transactions, and
+provider sync progress through an async, user-scoped read boundary. The next
+application checkpoint is webhook/event intake that can safely hand work to the
+existing synchronization pipeline.

@@ -96,3 +96,18 @@ provider-identity protection today.
 Domain validation rejects it before persistence. PostgreSQL also rejects sealing
 when fewer than two postings exist or their sum is nonzero, then prevents changes
 to sealed journal history. No partial journal remains after transaction rollback.
+
+## Read-side lifecycle visibility
+
+**Status:** Implemented through the local FastAPI transaction endpoint.
+
+The write pipeline preserves lifecycle history while `GET /transactions` exposes
+the latest provider projection. An `active` row currently counts, a `removed` row
+has been reversed, and a `replaced` pending row has been superseded by its posted
+transaction. Callers may filter these states with `?status=active`,
+`?status=removed`, or `?status=replaced` instead of relying on deletion to hide
+history.
+
+This endpoint does not reconstruct journal history or calculate balances yet. It
+provides the durable current-state read model that a future dashboard can consume;
+the sealed journals and postings remain the audit source of truth underneath it.

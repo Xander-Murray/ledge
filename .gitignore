@@ -10,6 +10,6 @@ htmlcov/
 .env
 .idea/
 .vscode/
-database-diagram.md
-database-diagram.html
+/database-diagram.md
+/database-diagram.html
 ledge-explained.md

@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc 3.10.2" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>Ledge Codebase Map</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    svg {
+      height: auto;
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      white-space: pre-wrap;
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      border: none;
+      border-top: 1px solid #1a1a1a;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: 1.5em;}
+    div.column{flex: auto;}
+    @media screen {
+    div.columns{gap: min(4vw, 1.5em);}
+    div.column{overflow-x: auto;}
+    }
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17211b;
+      --muted: #526158;
+      --paper: #f6f3e9;
+      --panel: #fffdf7;
+      --line: #d7d1bf;
+      --accent: #176b4d;
+    }
+
+    html { background: var(--paper); }
+    body {
+      box-sizing: border-box;
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 48px 56px 96px;
+      color: var(--ink);
+      background: var(--panel);
+      font-family: "IBM Plex Sans", "Avenir Next", sans-serif;
+      line-height: 1.65;
+      box-shadow: 0 0 60px rgb(38 48 41 / 10%);
+    }
+    h1, h2, h3 {
+      color: #123b2b;
+      font-family: Georgia, "Times New Roman", serif;
+      line-height: 1.2;
+    }
+    h1 { margin-bottom: 0.3em; font-size: 3rem; }
+    h2 {
+      margin-top: 2.4em;
+      padding-bottom: 0.35em;
+      border-bottom: 2px solid var(--line);
+    }
+    p, li { max-width: 82ch; }
+    code { padding: 0.12em 0.35em; border-radius: 4px; background: #ece8db; }
+    pre:not(.mermaid) {
+      overflow-x: auto;
+      padding: 1.2rem;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #202923;
+      color: #f2f5ee;
+    }
+    pre:not(.mermaid) code { padding: 0; background: transparent; }
+    pre.mermaid {
+      overflow-x: auto;
+      margin: 1.5rem 0;
+      padding: 1.5rem;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      text-align: center;
+    }
+    @media (max-width: 720px) {
+      body { padding: 28px 20px 64px; }
+      h1 { font-size: 2.25rem; }
+    }
+  </style>
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+
+    window.addEventListener("DOMContentLoaded", async () => {
+      document.querySelectorAll("pre.mermaid").forEach((diagram) => {
+        diagram.textContent = diagram.textContent;
+        diagram.className = "mermaid";
+      });
+      mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict" });
+      await mermaid.run({ nodes: document.querySelectorAll("pre.mermaid") });
+    });
+  </script>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">Ledge Codebase Map</h1>
+</header>
+<h1 id="ledge-codebase-map">Ledge Codebase Map</h1>
+<p>This is a local, gitignored visual guide to the entire project. It
+describes the current code, the durable PostgreSQL design, the local
+read API, and the next event-ingestion step. The Python source and
+Alembic migrations remain authoritative.</p>
+<p>Mermaid diagrams render directly in Obsidian and GitHub-flavored
+Markdown viewers. In VS Code, open Markdown Preview with
+<code>Ctrl+Shift+V</code> after installing Mermaid preview support if
+your Markdown renderer does not already include it.</p>
+<h2 id="status-legend">Status legend</h2>
+<pre class="mermaid"><code>flowchart LR
+    done[Implemented and tested]:::done
+    active[Current checkpoint]:::active
+    next[Next checkpoint]:::next
+    future[Later infrastructure]:::future
+
+    classDef done fill:#d9f2e6,stroke:#20744a,color:#123b29
+    classDef active fill:#fff0bf,stroke:#9a6b00,color:#4d3500
+    classDef next fill:#dcecff,stroke:#316aa3,color:#163957
+    classDef future fill:#eeeeee,stroke:#777777,color:#333333</code></pre>
+<h2 id="whole-system-view">Whole-system view</h2>
+<pre class="mermaid"><code>flowchart TB
+    %% External sources and entry points
+    subgraph external[External world]
+        fixture[Normalized JSON fixtures]:::done
+        plaid[Plaid Sandbox]:::future
+        webhook[Provider webhook]:::future
+    end
+
+    %% Provider adapters normalize external formats into Ledge-owned values.
+    subgraph provider[Provider boundary]
+        protocol[TransactionProvider protocol]:::done
+        fake[FakeTransactionProvider]:::done
+        plaid_adapter[Future Plaid adapter]:::future
+        page[TransactionSyncPage&lt;br/&gt;added / modified / removed&lt;br/&gt;next_cursor / has_more]:::done
+    end
+
+    %% The sync service will coordinate complete batches and cursor movement.
+    subgraph application[Application orchestration]
+        sync[Transaction sync service]:::done
+        cursor[Durable sync cursor schema]:::done
+    end
+
+    %% These accounting and lifecycle rules are independent of infrastructure.
+    subgraph domain[Pure domain]
+        transaction[Transaction]:::done
+        removal[TransactionRemoval]:::done
+        transitions[Add / modify / remove transitions]:::done
+        journal_factory[Journal and reversal factories]:::done
+        invariants[Balance and money invariants]:::done
+        state[LedgerState learning snapshot]:::done
+    end
+
+    %% Repository translates domain results into SQLAlchemy rows.
+    subgraph persistence[Persistence]
+        repository[LedgerRepository]:::done
+        orm[SQLAlchemy models]:::done
+        alembic[Alembic migrations]:::done
+        postgres[(PostgreSQL)]:::done
+    end
+
+    %% The current local HTTP boundary exposes database read models.
+    subgraph http[Local FastAPI read boundary]
+        app[Application factory and async sessions]:::done
+        health[GET health]:::done
+        accounts[GET accounts]:::done
+        transactions[GET transactions]:::done
+        sync_status[GET sync-status]:::done
+    end
+
+    %% Cloud components come after local sync semantics are proven.
+    subgraph cloud[Future AWS delivery]
+        receiver[Webhook receiver on EC2]:::future
+        s3[S3 raw-event archive]:::future
+        sqs[SQS and DLQ]:::future
+        lambda[Lambda sync worker]:::future
+    end
+
+    fixture --&gt; fake
+    fake -. implements .-&gt; protocol
+    plaid --&gt; plaid_adapter
+    plaid_adapter -. implements .-&gt; protocol
+    protocol --&gt; page
+    page --&gt; sync
+    cursor &lt;--&gt; sync
+    sync --&gt; transitions
+    sync --&gt; repository
+    transaction --&gt; transitions
+    removal --&gt; transitions
+    transitions --&gt; journal_factory
+    journal_factory --&gt; invariants
+    transitions --&gt; state
+    repository --&gt; journal_factory
+    repository --&gt; orm
+    orm --&gt; postgres
+    alembic --&gt; postgres
+    app --&gt; health
+    app --&gt; accounts
+    app --&gt; transactions
+    app --&gt; sync_status
+    health --&gt; postgres
+    accounts --&gt; orm
+    transactions --&gt; orm
+    sync_status --&gt; orm
+    webhook --&gt; receiver
+    receiver --&gt; s3
+    receiver --&gt; sqs
+    sqs --&gt; lambda
+    lambda --&gt; sync
+
+    classDef done fill:#d9f2e6,stroke:#20744a,color:#123b29
+    classDef active fill:#fff0bf,stroke:#9a6b00,color:#4d3500
+    classDef next fill:#dcecff,stroke:#316aa3,color:#163957
+    classDef future fill:#eeeeee,stroke:#777777,color:#333333</code></pre>
+<p>The central architectural rule is dependency direction:
+infrastructure calls the application and domain layers. The domain never
+imports SQLAlchemy, FastAPI, Plaid, or AWS libraries.</p>
+<h2 id="source-code-dependency-map">Source-code dependency map</h2>
+<pre class="mermaid"><code>flowchart LR
+    models[src/domain/models.py&lt;br/&gt;immutable domain values]
+    rules[src/domain/invariants.py&lt;br/&gt;balanced-posting checks]
+    ledger[src/domain/ledger.py&lt;br/&gt;journal factories and transitions]
+    provider_base[src/providers/base.py&lt;br/&gt;sync page and provider protocol]
+    provider_fake[src/providers/fake.py&lt;br/&gt;deterministic fixture adapter]
+    db[src/persistence/database.py&lt;br/&gt;engine and session factory]
+    orm[src/persistence/models.py&lt;br/&gt;relational mappings]
+    repo[src/persistence/repository.py&lt;br/&gt;atomic lifecycle writes]
+    api_app[src/api/app.py&lt;br/&gt;application wiring and identity]
+    api_dependencies[src/api/dependencies.py&lt;br/&gt;async request sessions]
+    api_routes[src/api routes&lt;br/&gt;health and read models]
+
+    models --&gt; rules
+    ledger --&gt; models
+    ledger --&gt; rules
+    provider_base --&gt; models
+    provider_fake --&gt; provider_base
+    provider_fake --&gt; models
+    db -. supplies sessions to .-&gt; repo
+    repo --&gt; orm
+    repo --&gt; ledger
+    repo --&gt; models
+    api_app --&gt; api_dependencies
+    api_app --&gt; api_routes
+    api_dependencies --&gt; db
+    api_routes --&gt; orm</code></pre>
+<p>Notes:</p>
+<ul>
+<li><code>domain/models.py</code> defines facts and accounting records;
+it performs no I/O.</li>
+<li><code>domain/ledger.py</code> decides what journals a lifecycle
+event should create.</li>
+<li><code>providers/base.py</code> describes what normalized provider
+data looks like to Ledge.</li>
+<li><code>providers/fake.py</code> supplies repeatable pages without
+credentials or networking.</li>
+<li><code>persistence/repository.py</code> locks rows, invokes domain
+factories, stages database rows, flushes drafts, and seals journals. Its
+caller owns commit or rollback.</li>
+<li><code>api/app.py</code> wires one configured user identity, the
+async session factory, and the health, account, transaction, and
+sync-status routers.</li>
+</ul>
+<h2 id="domain-object-map">Domain object map</h2>
+<pre class="mermaid"><code>classDiagram
+    class Transaction {
+        +UUID account_id
+        +str provider_transaction_id
+        +int amount_cents
+        +str description
+    }
+
+    class TransactionRemoval {
+        +UUID account_id
+        +str provider_transaction_id
+    }
+
+    class Posting {
+        +str ledger_account
+        +int amount_cents
+    }
+
+    class JournalEntry {
+        +UUID journal_entry_id
+        +str source_provider_transaction_id
+        +str description
+        +tuple postings
+        +UUID reversal_of_entry_id
+    }
+
+    class LedgerState {
+        +mapping transactions_by_provider_id
+        +tuple journal_entries
+        +set removed_provider_transaction_ids
+    }
+
+    class TransactionSyncPage {
+        +tuple added
+        +tuple modified
+        +tuple removed
+        +str next_cursor
+        +bool has_more
+    }
+
+    JournalEntry &quot;1&quot; *-- &quot;2..*&quot; Posting
+    LedgerState &quot;1&quot; *-- &quot;0..*&quot; Transaction
+    LedgerState &quot;1&quot; *-- &quot;0..*&quot; JournalEntry
+    TransactionSyncPage &quot;1&quot; *-- &quot;0..*&quot; Transaction : added and modified
+    TransactionSyncPage &quot;1&quot; *-- &quot;0..*&quot; TransactionRemoval : removed
+    JournalEntry --&gt; JournalEntry : optionally reverses</code></pre>
+<p><code>Transaction</code> is the provider’s latest complete fact.
+<code>TransactionRemoval</code> is smaller because providers only
+identify which transaction disappeared. Ledge loads the last-known
+amount, description, and active journal from PostgreSQL.</p>
+<h2 id="current-lifecycle-execution">Current lifecycle execution</h2>
+<pre class="mermaid"><code>sequenceDiagram
+    participant Caller
+    participant Repository as LedgerRepository
+    participant Domain as Domain factories
+    participant ORM as SQLAlchemy session
+    participant DB as PostgreSQL
+
+    Caller-&gt;&gt;ORM: begin transaction
+    Caller-&gt;&gt;Repository: add / modify / remove
+    Repository-&gt;&gt;DB: lock current projection when needed
+    Repository-&gt;&gt;Domain: create journal and/or reversal
+    Domain--&gt;&gt;Repository: immutable balanced JournalEntry
+    Repository-&gt;&gt;ORM: add draft journal and postings
+    Repository-&gt;&gt;DB: first flush
+    Note over Repository,DB: Rows exist only inside the open transaction
+    Repository-&gt;&gt;ORM: set sealed_at
+    Repository-&gt;&gt;DB: second flush
+    DB-&gt;&gt;DB: validate posting count and zero balance
+    DB--&gt;&gt;Repository: accept or raise
+    Repository--&gt;&gt;Caller: return Ledge transaction UUID
+    Caller-&gt;&gt;DB: commit on success; rollback on exception</code></pre>
+<h3 id="lifecycle-effects">Lifecycle effects</h3>
+<pre class="mermaid"><code>flowchart LR
+    add[Added event] --&gt; original[Append original journal]
+    original --&gt; active[Projection is active]
+
+    modify[Modified event] --&gt; reverse_old[Reverse active journal]
+    reverse_old --&gt; replacement[Append replacement journal]
+    replacement --&gt; update[Update active projection]
+
+    remove[Removed identity] --&gt; load[Load last-known projection]
+    load --&gt; reverse_current[Reverse active journal]
+    reverse_current --&gt; removed[Mark projection removed]</code></pre>
+<ul>
+<li>Addition creates one current financial effect.</li>
+<li>Modification preserves the old entry, cancels it, and appends the
+new effect.</li>
+<li>Removal preserves everything, cancels the current effect, and
+changes status.</li>
+<li>Repeating an identical event does not append another financial
+effect.</li>
+</ul>
+<h2 id="postgresql-entity-relationship-diagram">PostgreSQL entity
+relationship diagram</h2>
+<pre class="mermaid"><code>erDiagram
+    USERS ||--o{ FINANCIAL_ACCOUNTS : owns
+    USERS ||--o{ TRANSACTION_SYNC_STATES : owns
+    FINANCIAL_ACCOUNTS ||--o{ EXTERNAL_TRANSACTIONS : contains
+    EXTERNAL_TRANSACTIONS ||--o{ JOURNAL_ENTRIES : records
+    JOURNAL_ENTRIES ||--o{ POSTINGS : contains
+    JOURNAL_ENTRIES o|--o| JOURNAL_ENTRIES : reverses
+
+    USERS {
+        UUID id PK
+        TIMESTAMPTZ created_at
+    }
+
+    TRANSACTION_SYNC_STATES {
+        UUID id PK
+        UUID user_id FK
+        VARCHAR provider_name
+        VARCHAR provider_connection_id &quot;unique with provider_name&quot;
+        VARCHAR cursor &quot;nullable before first completed sync&quot;
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    FINANCIAL_ACCOUNTS {
+        UUID id PK
+        UUID user_id FK
+        VARCHAR name
+        VARCHAR account_type
+        TIMESTAMPTZ created_at
+    }
+
+    EXTERNAL_TRANSACTIONS {
+        UUID id PK
+        UUID user_id FK
+        UUID financial_account_id FK
+        VARCHAR provider_transaction_id &quot;unique with user_id&quot;
+        BIGINT amount_cents
+        VARCHAR description
+        BOOLEAN is_pending
+        VARCHAR pending_provider_transaction_id &quot;nullable self-reference&quot;
+        VARCHAR status
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    JOURNAL_ENTRIES {
+        UUID id PK
+        UUID external_transaction_id FK
+        UUID reversal_of_entry_id FK
+        VARCHAR description
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ sealed_at
+    }
+
+    POSTINGS {
+        BIGINT id PK
+        UUID journal_entry_id FK
+        SMALLINT line_number
+        VARCHAR ledger_account
+        BIGINT amount_cents
+    }</code></pre>
+<p>Table roles:</p>
+<ul>
+<li><code>users</code> is the current ownership boundary and the future
+authentication subject.</li>
+<li><code>transaction_sync_states</code> remembers one provider
+connection’s committed cursor.</li>
+<li><code>financial_accounts</code> represents checking, savings, and
+credit accounts.</li>
+<li><code>external_transactions</code> is mutable current provider
+truth, not ledger history.</li>
+<li><code>journal_entries</code> is immutable accounting history after
+sealing.</li>
+<li><code>postings</code> contains ordered debit and credit lines in
+integer cents.</li>
+<li>There is intentionally no <code>ledger_states</code> table.
+PostgreSQL replaces the large in-memory snapshot as durable state.</li>
+</ul>
+<h2 id="database-protections">Database protections</h2>
+<pre class="mermaid"><code>flowchart TB
+    python[Domain balance validation]
+    draft[Unsealed journal draft]
+    postings[Insert two or more postings]
+    seal[Set sealed_at]
+    trigger[PostgreSQL sealing trigger]
+    immutable[Immutable journal and postings]
+
+    python --&gt; draft --&gt; postings --&gt; seal --&gt; trigger
+    trigger --&gt; count{At least two postings?}
+    count -- yes --&gt; balance{Amounts sum to zero?}
+    balance -- yes --&gt; immutable</code></pre>
+<ul>
+<li>Composite foreign keys prevent cross-user account ownership
+mistakes.</li>
+<li><code>(user_id, provider_transaction_id)</code> prevents duplicate
+provider identities.</li>
+<li>A journal cannot reverse itself or a journal belonging to another
+transaction.</li>
+<li>An original journal can be reversed at most once.</li>
+<li>Sealing triggers independently verify posting count and
+balance.</li>
+<li>Sealed journals and postings cannot be updated or deleted.</li>
+<li>Foreign-key deletes use <code>RESTRICT</code>, preserving audit
+history.</li>
+</ul>
+<h2 id="migration-history">Migration history</h2>
+<pre class="mermaid"><code>flowchart LR
+    m1[Migration 1&lt;br/&gt;users and financial accounts]
+    m2[Migration 2&lt;br/&gt;external transactions]
+    m3[Migration 3&lt;br/&gt;journals and postings]
+    m4[Migration 4&lt;br/&gt;sealing and immutability triggers]
+    m5[Migration 5&lt;br/&gt;durable synchronization state]
+    m6[Migration 6&lt;br/&gt;pending-to-posted replacement]
+
+    m1 --&gt; m2 --&gt; m3 --&gt; m4 --&gt; m5 --&gt; m6</code></pre>
+<p>Alembic owns schema evolution. SQLAlchemy models describe the
+application view of the current schema; migrations describe how an
+existing database reaches it.</p>
+<h2 id="test-map">Test map</h2>
+<pre class="mermaid"><code>flowchart TB
+    domain_tests[tests/domain&lt;br/&gt;values, invariants, transitions, reversals]
+    scenario_tests[tests/scenarios&lt;br/&gt;complete in-memory provider feed]
+    provider_tests[tests/providers&lt;br/&gt;page contract, fixture parsing, pagination]:::active
+    application_tests[tests/application&lt;br/&gt;complete sync, rollback, retry, cursor races]:::active
+    persistence_tests[tests/persistence&lt;br/&gt;models, migrations, triggers, repository]
+    api_tests[tests/api&lt;br/&gt;health, ownership, filters, pagination, failures]:::active
+    realdb[(Disposable ledge_test PostgreSQL)]
+
+    domain_tests --&gt; scenario_tests
+    domain_tests --&gt; persistence_tests
+    provider_tests --&gt; application_tests
+    persistence_tests --&gt; realdb
+    application_tests --&gt; realdb
+    api_tests --&gt; realdb
+
+    classDef active fill:#fff0bf,stroke:#9a6b00,color:#4d3500
+    classDef next fill:#dcecff,stroke:#316aa3,color:#163957</code></pre>
+<p>Current verification checkpoint: 126 tests pass. Persistence and API
+integration tests migrate a real <code>ledge_test</code> database down
+to base and back to head, rather than substituting SQLite for PostgreSQL
+behavior.</p>
+<h2 id="what-exists-versus-what-comes-next">What exists versus what
+comes next</h2>
+<pre class="mermaid"><code>flowchart LR
+    current[Current checkpoint&lt;br/&gt;sync pipeline plus local read API]:::active
+    intake[Next&lt;br/&gt;webhook and event intake]:::next
+    plaid[Later&lt;br/&gt;Plaid Sandbox adapter]:::future
+    aws[Later&lt;br/&gt;S3, SQS, Lambda, EC2, RDS]:::future
+
+    current --&gt; intake --&gt; plaid --&gt; aws
+
+    classDef active fill:#fff0bf,stroke:#9a6b00,color:#4d3500
+    classDef next fill:#dcecff,stroke:#316aa3,color:#163957
+    classDef future fill:#eeeeee,stroke:#777777,color:#333333</code></pre>
+<p><code>TransactionSynchronizer</code> now starts from a stored cursor,
+asks <code>TransactionProvider</code> for every available page, and only
+then opens one database transaction to apply all changes and advance the
+cursor. If any lifecycle operation fails, both ledger changes and cursor
+advancement roll back. FastAPI now reads user-scoped accounts, current
+transactions, and committed sync progress through async SQLAlchemy
+sessions. The next boundary is safe event intake that can hand work to
+this existing pipeline.</p>
+<h2 id="quick-directory-guide">Quick directory guide</h2>
+<pre class="text"><code>src/
+|-- application/     complete-update orchestration and cursor concurrency
+|-- api/             FastAPI wiring, identity, health, and read endpoints
+|-- domain/          financial values, invariants, and lifecycle decisions
+|-- persistence/     SQLAlchemy mappings, sessions, and atomic repository writes
+`-- providers/       provider-independent contracts and the fake adapter
+
+migrations/
+`-- versions/        ordered PostgreSQL schema history
+
+tests/
+|-- application/     atomic synchronization, rollback, retry, and cursor races
+|-- api/             ASGI behavior and real PostgreSQL ownership queries
+|-- domain/          fast pure-Python behavior
+|-- persistence/     real PostgreSQL integration and rollback behavior
+|-- providers/       deterministic page and cursor behavior
+|-- scenarios/       complete in-memory lifecycle story
+`-- fixtures/        normalized fake-provider JSON pages
+
+docs/
+|-- architecture.md  product and system boundaries
+|-- invariants.md    rules Ledge must never violate
+`-- lifecycles.md    accounting behavior over time</code></pre>
+</body>
+</html>

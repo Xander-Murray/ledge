@@ -14,9 +14,10 @@ pending-to-posted activity into an auditable double-entry ledger. Later phases
 add recurring-charge detection, a 30-day projection, and a transparent
 safe-to-spend estimate.
 
-The first milestone established domain models, ledger operations, PostgreSQL
-persistence, migrations, and automated tests. The current milestone is exposing
-those capabilities through a small FastAPI boundary before adding Plaid or AWS.
+The first milestones established domain models, ledger operations, PostgreSQL
+persistence, migrations, fake-provider synchronization, and automated tests. A
+small FastAPI boundary now exposes the durable read models. Webhook intake and a
+real Plaid adapter remain the next application milestones before AWS deployment.
 
 ## Current checkpoint non-goals
 
@@ -67,6 +68,9 @@ SQLAlchemy models
         |
         v
 PostgreSQL constraints, triggers, and migrations
+        |
+        v
+FastAPI async read endpoints
 ```
 
 Starting with pure functions keeps accounting rules easy to understand and test.
@@ -150,10 +154,10 @@ original active projection without a partial reversal.
 
 ## Current synchronization boundary
 
-A sync run will start from the stored cursor and fetch every currently available
-provider page before opening its write transaction. It will then lock and recheck
-the sync-state row, apply the complete fetched update, store the final cursor, and
-commit once. Any exception will roll back both ledger changes and cursor movement.
+A sync run starts from the stored cursor and fetches every currently available
+provider page before opening its write transaction. It then locks and rechecks the
+sync-state row, applies the complete fetched update, stores the final cursor, and
+commits once. Any exception rolls back both ledger changes and cursor movement.
 
 If provider data changes during pagination, the fetched batch must be discarded
 and pagination restarted from the original cursor. If processing fails while
@@ -168,8 +172,9 @@ handled when the Plaid adapter is introduced.
 ## Current HTTP boundary
 
 ```text
-Uvicorn -> FastAPI application factory -> async request session
-                                      -> SELECT 1 -> PostgreSQL
+Uvicorn -> FastAPI application factory -> configured LEDGE_USER_ID
+                                      -> async request session
+                                      -> PostgreSQL read query
 ```
 
 The application factory creates an async SQLAlchemy engine when one is not
@@ -178,7 +183,23 @@ receives a short-lived async session through dependency injection. The existing
 synchronous engine and repository remain the write path for synchronization;
 the HTTP layer uses async sessions so database waits do not block the event loop.
 
-`GET /health` is the first endpoint. It returns `200` only after PostgreSQL
-answers a readiness query and maps SQLAlchemy failures to `503` without exposing
-connection details. Unit tests replace the session factory at this boundary, and
-an integration test executes the same route against `ledge_test`.
+The current HTTP surface is intentionally read-only:
+
+```text
+GET /health         service and PostgreSQL readiness
+GET /accounts       configured user's checking, savings, and credit accounts
+GET /transactions   current provider projection with account/status filters
+GET /sync-status    committed cursor state for each provider connection
+```
+
+`GET /transactions` orders by most recently updated first and bounds offset
+pagination to at most 100 rows per request. Removed and replaced rows remain
+queryable because visibility is part of the audit story. Resource responses omit
+`user_id`, but every SQL statement filters by the UUID loaded from
+`LEDGE_USER_ID`. That configured identity is an explicit single-user MVP boundary,
+not authentication; `create_app` accepts an injected UUID so a future auth
+dependency can replace it without changing route queries.
+
+All four endpoints map SQLAlchemy failures to `503` without exposing connection
+details. Unit tests replace the session factory, while integration tests migrate
+and query the real disposable `ledge_test` PostgreSQL database.

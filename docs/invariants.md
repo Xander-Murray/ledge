@@ -20,8 +20,9 @@ of them must be rejected or rolled back.
    version leads to the same final ledger state.
 8. **Removed transactions remain auditable.** Removal reverses the active effect;
    it does not erase transaction or journal history.
-9. **Queries are scoped to the authenticated user.** Users cannot read or alter
-   another user's financial data.
+9. **Queries are scoped to the selected user identity.** A request cannot read
+   another user's financial data. Today that identity is deployment configuration;
+   a future multi-user version must derive it from verified authentication.
 10. **Raw provider events are retained.** Exact payloads are kept for diagnosis
     and controlled replay.
 11. **A pending transaction has at most one posted replacement.** The pending
@@ -78,10 +79,15 @@ credits the card liability while the expense is debited.
   transaction. The coordinator detects cursor races, rejects pagination loops,
   rolls failed batches back completely, matches pending replacements across page
   boundaries, and can retry from the unchanged cursor.
+- Account, transaction, and sync-status SQL queries require the configured user
+  UUID. Integration fixtures include another user's rows and prove those rows are
+  absent from API responses. Resource schemas also omit `user_id`.
+- HTTP query validation constrains transaction status to known lifecycle values,
+  `limit` to 1 through 100, and `offset` to a nonnegative integer.
 
 ## Planned enforcement
 
 - Provider event IDs and transaction versions will distinguish duplicate, newer,
   and stale updates; version-aware idempotency is not implemented yet.
-- Authentication and user-scoped query services will enforce ownership at the API
-  boundary; the relational schema already enforces user/account ownership.
+- Authentication will replace the configured single-user identity with a verified
+  per-request identity. The read-query ownership checks are already in place.
