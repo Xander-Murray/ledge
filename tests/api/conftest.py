@@ -22,6 +22,7 @@ from persistence.database import (
 from persistence.models import (
     ExternalTransactionModel,
     FinancialAccountModel,
+    TransactionSyncStateModel,
     UserModel,
 )
 
@@ -36,6 +37,9 @@ GROCERY_TRANSACTION_ID = UUID("10000000-0000-0000-0000-000000000001")
 PENDING_TRANSACTION_ID = UUID("10000000-0000-0000-0000-000000000002")
 REMOVED_TRANSACTION_ID = UUID("10000000-0000-0000-0000-000000000003")
 OTHER_TRANSACTION_ID = UUID("10000000-0000-0000-0000-000000000004")
+FAKE_SYNC_STATE_ID = UUID("20000000-0000-0000-0000-000000000001")
+PLAID_SYNC_STATE_ID = UUID("20000000-0000-0000-0000-000000000002")
+OTHER_SYNC_STATE_ID = UUID("20000000-0000-0000-0000-000000000003")
 
 
 def _get_test_database_url() -> str:
@@ -92,6 +96,31 @@ def api_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
                     user_id=OTHER_USER_ID,
                     name="Someone Else's Account",
                     account_type="credit",
+                ),
+            ]
+        )
+        session.add_all(
+            [
+                TransactionSyncStateModel(
+                    id=FAKE_SYNC_STATE_ID,
+                    user_id=USER_ID,
+                    provider_name="fake",
+                    provider_connection_id="sandbox-primary",
+                    cursor="fake-cursor-12",
+                ),
+                TransactionSyncStateModel(
+                    id=PLAID_SYNC_STATE_ID,
+                    user_id=USER_ID,
+                    provider_name="plaid",
+                    provider_connection_id="sandbox-secondary",
+                    cursor=None,
+                ),
+                TransactionSyncStateModel(
+                    id=OTHER_SYNC_STATE_ID,
+                    user_id=OTHER_USER_ID,
+                    provider_name="private-provider",
+                    provider_connection_id="other-user-connection",
+                    cursor="private-cursor",
                 ),
             ]
         )
