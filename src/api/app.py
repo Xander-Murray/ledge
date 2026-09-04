@@ -12,6 +12,7 @@ from api.config import get_configured_user_id
 from api.health import router as health_router
 from api.sync_status import router as sync_status_router
 from api.transactions import router as transactions_router
+from api.webhooks import router as webhooks_router
 from persistence.database import (
     AsyncSessionFactory,
     create_async_database_engine,
@@ -52,4 +53,5 @@ def create_app(
     app.include_router(accounts_router)
     app.include_router(transactions_router)
     app.include_router(sync_status_router)
+    app.include_router(webhooks_router)
     return app

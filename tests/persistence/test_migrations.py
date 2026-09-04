@@ -41,6 +41,7 @@ def test_migrations_upgrade_and_downgrade(
             "alembic_version",
             "external_transactions",
             "financial_accounts",
+            "inbound_events",
             "journal_entries",
             "postings",
             "transaction_sync_states",

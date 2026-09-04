@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
@@ -11,12 +12,14 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Identity,
+    Index,
     MetaData,
     SmallInteger,
     UniqueConstraint,
     Uuid,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 NAMING_CONVENTION = {
@@ -151,6 +154,77 @@ class TransactionSyncStateModel(Base):
     )
 
     user: Mapped[UserModel] = relationship(back_populates="transaction_sync_states")
+
+    inbound_events: Mapped[list[InboundEventModel]] = relationship(
+        back_populates="sync_state"
+    )
+
+
+class InboundEventModel(Base):
+    """A durable, duplicate-safe provider notification awaiting processing."""
+
+    __tablename__ = "inbound_events"
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(provider_event_id)) > 0",
+            name="provider_event_id_nonempty",
+        ),
+        CheckConstraint(
+            "length(trim(event_type)) > 0",
+            name="event_type_nonempty",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'processed', 'failed')",
+            name="status",
+        ),
+        CheckConstraint(
+            "(status IN ('pending', 'processing') AND processed_at IS NULL) OR "
+            "(status IN ('processed', 'failed') AND processed_at IS NOT NULL)",
+            name="processing_timestamp",
+        ),
+        UniqueConstraint(
+            "transaction_sync_state_id",
+            "provider_event_id",
+            name="uq_inbound_events_sync_state_provider_event",
+        ),
+        Index(
+            "ix_inbound_events_status_received_at",
+            "status",
+            "received_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+
+    transaction_sync_state_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("transaction_sync_states.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+
+    provider_event_id: Mapped[str] = mapped_column(nullable=False)
+
+    event_type: Mapped[str] = mapped_column(nullable=False)
+
+    raw_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+    status: Mapped[str] = mapped_column(nullable=False, server_default="pending")
+
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    processed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    sync_state: Mapped[TransactionSyncStateModel] = relationship(
+        back_populates="inbound_events"
+    )
 
 
 class ExternalTransactionModel(Base):
