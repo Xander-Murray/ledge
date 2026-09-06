@@ -4,6 +4,10 @@ from typing import Protocol
 from domain.models import Transaction, TransactionRemoval
 
 
+class ProviderError(RuntimeError):
+    """Base class for expected provider-adapter failures."""
+
+
 @dataclass(frozen=True, slots=True)
 class TransactionSyncPage:
     """One normalized page of transaction changes from a provider."""

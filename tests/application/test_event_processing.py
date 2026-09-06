@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Lock
 from uuid import UUID, uuid4
@@ -16,6 +17,8 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from application.event_processing import (
+    InboundEventBusyError,
+    InboundEventClaimLostError,
     InboundEventNotFoundError,
     InboundEventProcessor,
     ProviderNotConfiguredError,
@@ -31,8 +34,8 @@ from persistence.models import (
     TransactionSyncStateModel,
     UserModel,
 )
-from providers.base import TransactionSyncPage
-from providers.fake import FakeTransactionProvider
+from providers.base import TransactionProvider, TransactionSyncPage
+from providers.fake import FakeTransactionProvider, UnknownProviderCursorError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ACCOUNT_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
@@ -50,7 +53,7 @@ class EventProcessingDatabase:
 
 
 class CoordinatedProvider:
-    """Pause the first fetch so a duplicate worker can contend for the row."""
+    """Pause a fetch so another worker can inspect or reclaim its lease."""
 
     def __init__(self) -> None:
         self.fetch_started = Event()
@@ -71,6 +74,36 @@ class CoordinatedProvider:
             next_cursor="cursor-1",
             has_more=False,
         )
+
+
+@dataclass
+class MutableClock:
+    current: datetime
+
+    def __call__(self) -> datetime:
+        return self.current
+
+    def advance(self, elapsed: timedelta) -> None:
+        self.current += elapsed
+
+
+class AdvancingProvider:
+    """Advance a test clock while simulating provider request latency."""
+
+    def __init__(
+        self,
+        provider: TransactionProvider,
+        clock: MutableClock,
+        elapsed: timedelta,
+    ) -> None:
+        self._provider = provider
+        self._clock = clock
+        self._elapsed = elapsed
+
+    def fetch_transaction_updates(self, cursor: str | None) -> TransactionSyncPage:
+        page = self._provider.fetch_transaction_updates(cursor)
+        self._clock.advance(self._elapsed)
+        return page
 
 
 def _get_test_database_url() -> str:
@@ -146,11 +179,16 @@ def event_processing_database(
 
 def _processor(
     database: EventProcessingDatabase,
-    provider: FakeTransactionProvider | CoordinatedProvider,
+    provider: TransactionProvider,
+    *,
+    lease_timeout: timedelta = timedelta(minutes=5),
+    clock: Callable[[], datetime] | None = None,
 ) -> InboundEventProcessor:
     return InboundEventProcessor(
         session_factory=database.session_factory,
         providers={PROVIDER_NAME: provider},
+        lease_timeout=lease_timeout,
+        clock=clock,
     )
 
 
@@ -185,18 +223,38 @@ def _provider_with_one_transaction() -> FakeTransactionProvider:
 def test_pending_event_runs_synchronization_and_becomes_processed(
     event_processing_database: EventProcessingDatabase,
 ) -> None:
-    provider = _provider_with_one_transaction()
+    clock = MutableClock(datetime(2026, 9, 6, 14, 0, tzinfo=UTC))
+    inner_provider = _provider_with_one_transaction()
+    provider = AdvancingProvider(
+        inner_provider,
+        clock,
+        timedelta(milliseconds=275),
+    )
 
-    result = _processor(event_processing_database, provider).process(
+    result = _processor(event_processing_database, provider, clock=clock).process(
         event_processing_database.event_id
     )
 
     assert result.event_id == event_processing_database.event_id
+    assert result.status == "processed"
     assert result.already_processed is False
+    assert result.attempt_count == 1
+    assert result.processing_started_at == datetime(2026, 9, 6, 14, 0, tzinfo=UTC)
+    assert result.processed_at == datetime(
+        2026,
+        9,
+        6,
+        14,
+        0,
+        0,
+        275_000,
+        tzinfo=UTC,
+    )
+    assert result.processing_duration_ms == 275
     assert result.synchronization is not None
     assert result.synchronization.ending_cursor == "cursor-1"
     assert result.synchronization.added_count == 1
-    assert provider.requested_cursors == [None]
+    assert inner_provider.requested_cursors == [None]
 
     with event_processing_database.session_factory() as session:
         event = session.get(InboundEventModel, event_processing_database.event_id)
@@ -207,7 +265,11 @@ def test_pending_event_runs_synchronization_and_becomes_processed(
 
         assert event is not None
         assert event.status == "processed"
+        assert event.attempt_count == 1
+        assert event.processing_token is None
+        assert event.processing_started_at == result.processing_started_at
         assert event.processed_at is not None
+        assert event.last_error_code is None
         assert sync_state is not None
         assert sync_state.cursor == "cursor-1"
         assert session.scalar(select(func.count(ExternalTransactionModel.id))) == 1
@@ -224,12 +286,14 @@ def test_processed_event_is_an_idempotent_no_op(
     result = processor.process(event_processing_database.event_id)
 
     assert result.already_processed is True
+    assert result.status == "processed"
+    assert result.attempt_count == 1
     assert result.synchronization is None
     assert provider.requested_cursors == [None]
 
 
 @pytest.mark.integration
-def test_failed_synchronization_rolls_event_back_for_retry(
+def test_failed_synchronization_records_failure_and_can_be_retried(
     event_processing_database: EventProcessingDatabase,
 ) -> None:
     missing_modification = Transaction(
@@ -262,8 +326,12 @@ def test_failed_synchronization_rolls_event_back_for_retry(
             event_processing_database.sync_state_id,
         )
         assert event is not None
-        assert event.status == "pending"
-        assert event.processed_at is None
+        assert event.status == "failed"
+        assert event.attempt_count == 1
+        assert event.processing_token is None
+        assert event.processing_started_at is not None
+        assert event.processed_at is not None
+        assert event.last_error_code == "ledger_error"
         assert sync_state is not None
         assert sync_state.cursor is None
         assert session.scalar(select(func.count(ExternalTransactionModel.id))) == 0
@@ -274,32 +342,153 @@ def test_failed_synchronization_rolls_event_back_for_retry(
     ).process(event_processing_database.event_id)
 
     assert retry_result.already_processed is False
+    assert retry_result.status == "processed"
+    assert retry_result.attempt_count == 2
     assert retry_result.synchronization is not None
     assert retry_result.synchronization.ending_cursor == "cursor-1"
 
+    with event_processing_database.session_factory() as session:
+        event = session.get(InboundEventModel, event_processing_database.event_id)
+        assert event is not None
+        assert event.status == "processed"
+        assert event.attempt_count == 2
+        assert event.processing_token is None
+        assert event.last_error_code is None
+
 
 @pytest.mark.integration
-def test_duplicate_workers_serialize_and_synchronize_only_once(
+def test_duplicate_worker_is_rejected_while_the_first_lease_is_active(
     event_processing_database: EventProcessingDatabase,
 ) -> None:
     provider = CoordinatedProvider()
     processor = _processor(event_processing_database, provider)
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=1) as executor:
         first_worker = executor.submit(
             processor.process,
             event_processing_database.event_id,
         )
         assert provider.fetch_started.wait(timeout=5)
-        second_worker = executor.submit(
-            processor.process,
-            event_processing_database.event_id,
-        )
-        provider.release_fetch.set()
-        results = (first_worker.result(timeout=5), second_worker.result(timeout=5))
+        try:
+            with pytest.raises(InboundEventBusyError, match="active processing lease"):
+                processor.process(event_processing_database.event_id)
+        finally:
+            provider.release_fetch.set()
+        result = first_worker.result(timeout=5)
 
     assert provider.call_count == 1
-    assert sorted(result.already_processed for result in results) == [False, True]
+    assert result.already_processed is False
+
+
+@pytest.mark.integration
+def test_expired_processing_lease_is_reclaimed(
+    event_processing_database: EventProcessingDatabase,
+) -> None:
+    now = datetime(2026, 9, 6, 15, 0, tzinfo=UTC)
+    with event_processing_database.session_factory() as session, session.begin():
+        event = session.get(InboundEventModel, event_processing_database.event_id)
+        assert event is not None
+        event.status = "processing"
+        event.attempt_count = 1
+        event.processing_token = uuid4()
+        event.processing_started_at = now - timedelta(minutes=6)
+
+    result = _processor(
+        event_processing_database,
+        _provider_with_one_transaction(),
+        clock=lambda: now,
+    ).process(event_processing_database.event_id)
+
+    assert result.status == "processed"
+    assert result.already_processed is False
+    assert result.attempt_count == 2
+    assert result.processing_started_at == now
+
+
+@pytest.mark.integration
+def test_expired_worker_cannot_overwrite_the_reclaiming_workers_result(
+    event_processing_database: EventProcessingDatabase,
+) -> None:
+    clock = MutableClock(datetime(2026, 9, 6, 16, 0, tzinfo=UTC))
+    stale_provider = CoordinatedProvider()
+    stale_processor = _processor(
+        event_processing_database,
+        stale_provider,
+        clock=clock,
+    )
+    reclaiming_provider = FakeTransactionProvider(
+        {
+            None: TransactionSyncPage(
+                added=(),
+                modified=(),
+                removed=(),
+                next_cursor="cursor-2",
+                has_more=False,
+            )
+        }
+    )
+    reclaiming_processor = _processor(
+        event_processing_database,
+        reclaiming_provider,
+        clock=clock,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        stale_worker = executor.submit(
+            stale_processor.process,
+            event_processing_database.event_id,
+        )
+        assert stale_provider.fetch_started.wait(timeout=5)
+        clock.advance(timedelta(minutes=6))
+        try:
+            reclaiming_result = reclaiming_processor.process(
+                event_processing_database.event_id
+            )
+        finally:
+            stale_provider.release_fetch.set()
+        with pytest.raises(InboundEventClaimLostError, match="no longer owns"):
+            stale_worker.result(timeout=5)
+
+    assert reclaiming_result.status == "processed"
+    assert reclaiming_result.attempt_count == 2
+    with event_processing_database.session_factory() as session:
+        event = session.get(InboundEventModel, event_processing_database.event_id)
+        sync_state = session.get(
+            TransactionSyncStateModel,
+            event_processing_database.sync_state_id,
+        )
+        assert event is not None
+        assert event.status == "processed"
+        assert event.attempt_count == 2
+        assert event.processing_token is None
+        assert sync_state is not None
+        assert sync_state.cursor == "cursor-2"
+
+
+@pytest.mark.integration
+def test_provider_failure_is_recorded_without_storing_the_error_message(
+    event_processing_database: EventProcessingDatabase,
+) -> None:
+    with event_processing_database.session_factory() as session, session.begin():
+        sync_state = session.get(
+            TransactionSyncStateModel,
+            event_processing_database.sync_state_id,
+        )
+        assert sync_state is not None
+        sync_state.cursor = "missing-cursor"
+
+    provider = FakeTransactionProvider({})
+    with pytest.raises(UnknownProviderCursorError, match="missing-cursor"):
+        _processor(event_processing_database, provider).process(
+            event_processing_database.event_id
+        )
+
+    with event_processing_database.session_factory() as session:
+        event = session.get(InboundEventModel, event_processing_database.event_id)
+        assert event is not None
+        assert event.status == "failed"
+        assert event.last_error_code == "provider_error"
+        assert "missing-cursor" not in event.last_error_code
 
 
 @pytest.mark.integration

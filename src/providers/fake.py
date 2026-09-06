@@ -8,10 +8,10 @@ from typing import Any
 from uuid import UUID
 
 from domain.models import Transaction, TransactionRemoval
-from providers.base import TransactionSyncPage
+from providers.base import ProviderError, TransactionSyncPage
 
 
-class UnknownProviderCursorError(LookupError):
+class UnknownProviderCursorError(ProviderError, LookupError):
     """Raised when a fake provider receives a cursor absent from its fixture."""
 
 

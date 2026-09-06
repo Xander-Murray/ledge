@@ -12,15 +12,19 @@ from persistence.repository import LedgerRepository
 from providers.base import TransactionProvider, TransactionSyncPage
 
 
-class SyncStateNotFoundError(LookupError):
+class SynchronizationError(RuntimeError):
+    """Base class for expected synchronization coordination failures."""
+
+
+class SyncStateNotFoundError(SynchronizationError, LookupError):
     """Raised when synchronization targets an unknown provider connection."""
 
 
-class SyncCursorConflictError(RuntimeError):
+class SyncCursorConflictError(SynchronizationError):
     """Raised when another worker advances a cursor during page fetching."""
 
 
-class ProviderPaginationError(RuntimeError):
+class ProviderPaginationError(SynchronizationError):
     """Raised when provider pagination repeats a cursor without finishing."""
 
 

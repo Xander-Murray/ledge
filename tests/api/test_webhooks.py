@@ -120,6 +120,8 @@ async def test_redelivery_reports_the_existing_events_current_status(
                 event = session.scalar(select(InboundEventModel))
                 assert event is not None
                 event.status = "processed"
+                event.attempt_count = 1
+                event.processing_started_at = event.received_at
                 event.processed_at = datetime.now(UTC)
         finally:
             engine.dispose()

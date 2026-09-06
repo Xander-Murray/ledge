@@ -13,6 +13,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Identity,
     Index,
+    Integer,
     MetaData,
     SmallInteger,
     UniqueConstraint,
@@ -179,9 +180,23 @@ class InboundEventModel(Base):
             name="status",
         ),
         CheckConstraint(
-            "(status IN ('pending', 'processing') AND processed_at IS NULL) OR "
-            "(status IN ('processed', 'failed') AND processed_at IS NOT NULL)",
+            "(status = 'pending' AND attempt_count = 0) OR "
+            "(status <> 'pending' AND attempt_count >= 1)",
+            name="attempt_count",
+        ),
+        CheckConstraint(
+            "(status = 'pending' AND processing_token IS NULL AND "
+            "processing_started_at IS NULL AND processed_at IS NULL) OR "
+            "(status = 'processing' AND processing_token IS NOT NULL AND "
+            "processing_started_at IS NOT NULL AND processed_at IS NULL) OR "
+            "(status IN ('processed', 'failed') AND processing_token IS NULL AND "
+            "processing_started_at IS NOT NULL AND processed_at IS NOT NULL)",
             name="processing_timestamp",
+        ),
+        CheckConstraint(
+            "(status = 'failed' AND length(trim(last_error_code)) > 0) OR "
+            "(status <> 'failed' AND last_error_code IS NULL)",
+            name="failure_code",
         ),
         UniqueConstraint(
             "transaction_sync_state_id",
@@ -192,6 +207,11 @@ class InboundEventModel(Base):
             "ix_inbound_events_status_received_at",
             "status",
             "received_at",
+        ),
+        Index(
+            "ix_inbound_events_status_processing_started_at",
+            "status",
+            "processing_started_at",
         ),
     )
 
@@ -211,6 +231,19 @@ class InboundEventModel(Base):
 
     status: Mapped[str] = mapped_column(nullable=False, server_default="pending")
 
+    attempt_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default="0",
+    )
+
+    processing_token: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+
+    processing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -221,6 +254,8 @@ class InboundEventModel(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+
+    last_error_code: Mapped[str | None] = mapped_column(nullable=True)
 
     sync_state: Mapped[TransactionSyncStateModel] = relationship(
         back_populates="inbound_events"

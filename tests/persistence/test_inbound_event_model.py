@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from sqlalchemy import CheckConstraint, DateTime, Index, UniqueConstraint, inspect
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Index,
+    Integer,
+    UniqueConstraint,
+    Uuid,
+    inspect,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 
 from persistence.models import InboundEventModel, TransactionSyncStateModel
@@ -16,16 +24,29 @@ def test_inbound_event_has_durable_payload_and_processing_fields() -> None:
         "event_type",
         "raw_payload",
         "status",
+        "attempt_count",
+        "processing_token",
+        "processing_started_at",
         "received_at",
         "processed_at",
+        "last_error_code",
     }
     assert isinstance(columns.raw_payload.type, JSONB)
     assert columns.raw_payload.nullable is False
     assert columns.status.server_default is not None
+    assert isinstance(columns.attempt_count.type, Integer)
+    assert columns.attempt_count.nullable is False
+    assert columns.attempt_count.server_default is not None
+    assert isinstance(columns.processing_token.type, Uuid)
+    assert columns.processing_token.nullable is True
+    assert isinstance(columns.processing_started_at.type, DateTime)
+    assert columns.processing_started_at.type.timezone is True
+    assert columns.processing_started_at.nullable is True
     assert isinstance(columns.received_at.type, DateTime)
     assert columns.received_at.type.timezone is True
     assert columns.received_at.server_default is not None
     assert columns.processed_at.nullable is True
+    assert columns.last_error_code.nullable is True
 
 
 def test_inbound_event_enforces_identity_and_lifecycle_constraints() -> None:
@@ -55,7 +76,9 @@ def test_inbound_event_enforces_identity_and_lifecycle_constraints() -> None:
         "provider_event_id",
     )
     assert check_names == {
+        "ck_inbound_events_attempt_count",
         "ck_inbound_events_event_type_nonempty",
+        "ck_inbound_events_failure_code",
         "ck_inbound_events_processing_timestamp",
         "ck_inbound_events_provider_event_id_nonempty",
         "ck_inbound_events_status",
@@ -63,6 +86,10 @@ def test_inbound_event_enforces_identity_and_lifecycle_constraints() -> None:
     assert indexes["ix_inbound_events_status_received_at"] == (
         "status",
         "received_at",
+    )
+    assert indexes["ix_inbound_events_status_processing_started_at"] == (
+        "status",
+        "processing_started_at",
     )
 
 
