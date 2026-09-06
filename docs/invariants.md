@@ -7,26 +7,30 @@ of them must be rejected or rolled back.
    exactly zero. Positive postings are debits and negative postings are credits.
 2. **Money uses integer minor units.** USD values are stored and calculated as
    cents. Binary floating-point values never enter the domain model or database.
-3. **A provider transaction version is applied at most once.** The pair of
-   provider transaction ID and version is unique. Re-delivery must not add another
-   financial effect.
+3. **A provider notification is accepted once per connection.** Re-delivering an
+   identical provider event ID returns its existing inbox row; changed data under
+   that identity is rejected. Transaction-version ordering remains a future rule.
 4. **Journal entries are immutable.** Corrections create a linked reversal and a
    replacement entry instead of editing history.
-5. **A synchronization page never partially commits.** All changes in a page and
-   its cursor update share one database transaction.
-6. **A cursor advances only after its page commits.** Failed pages retain the last
-   successfully committed cursor.
-7. **Duplicate delivery is harmless.** Repeating an event, page, or transaction
-   version leads to the same final ledger state.
+5. **A synchronization batch never partially commits.** All fetched pages and the
+   final cursor update share one database transaction.
+6. **A cursor advances only after its batch commits.** Failed batches retain the
+   last successfully committed cursor.
+7. **Duplicate delivery is harmless.** Repeating an event, fetched batch, or
+   transaction update leads to the same final ledger state.
 8. **Removed transactions remain auditable.** Removal reverses the active effect;
    it does not erase transaction or journal history.
 9. **Queries are scoped to the selected user identity.** A request cannot read
    another user's financial data. Today that identity is deployment configuration;
    a future multi-user version must derive it from verified authentication.
-10. **Raw provider events are retained.** Exact payloads are kept for diagnosis
-    and controlled replay.
+10. **Submitted provider payloads are retained.** The accepted payload object is
+    kept in PostgreSQL for diagnosis and future controlled replay.
 11. **A pending transaction has at most one posted replacement.** The pending
     effect is reversed once, and the posted effect becomes the active truth.
+12. **Only the current event claim may finalize work.** Each attempt owns a unique
+    token; an expired worker cannot overwrite a newer worker's result.
+13. **Provider calls do not hold the inbox claim transaction open.** Claiming and
+    finalization use short transactions around slower synchronization work.
 
 ## Sign conventions
 
@@ -79,6 +83,16 @@ credits the card liability while the expense is debited.
   transaction. The coordinator detects cursor races, rejects pagination loops,
   rolls failed batches back completely, matches pending replacements across page
   boundaries, and can retry from the unchanged cursor.
+- Each inbound notification is unique within its provider connection. PostgreSQL
+  stores the submitted payload and lifecycle state, while intake distinguishes an
+  identical redelivery from conflicting reuse of the same provider event ID.
+- Processing claims increment an attempt count and store a unique token plus
+  lease timestamp. An active claim rejects another worker; an expired claim can be
+  reclaimed, and token-checked completion prevents the expired worker from
+  changing the newer result.
+- Expected failures store only a bounded category. Completion and failure retain
+  timestamps for latency and retry measurements without persisting raw exception
+  messages.
 - Account, transaction, and sync-status SQL queries require the configured user
   UUID. Integration fixtures include another user's rows and prove those rows are
   absent from API responses. Resource schemas also omit `user_id`.
@@ -87,7 +101,9 @@ credits the card liability while the expense is debited.
 
 ## Planned enforcement
 
-- Provider event IDs and transaction versions will distinguish duplicate, newer,
-  and stale updates; version-aware idempotency is not implemented yet.
+- Provider transaction versions will distinguish newer and stale updates;
+  version-aware ordering is not implemented yet.
+- SQS visibility timeouts and dead-letter policies will complement, rather than
+  replace, the database lease and claim-token guarantees.
 - Authentication will replace the configured single-user identity with a verified
   per-request identity. The read-query ownership checks are already in place.

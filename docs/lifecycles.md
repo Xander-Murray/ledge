@@ -74,6 +74,35 @@ journal, not the obsolete original journal.
 
 ## Failure and recovery scenarios
 
+### Inbound event processing
+
+**Status:** Implemented for the local normalized webhook and fake-provider
+pipeline.
+
+```text
+pending, attempt 0
+  -> worker claims with token A
+processing, attempt 1
+  -> synchronization succeeds
+processed, token cleared, duration measurable
+
+processing, attempt 1
+  -> expected provider, synchronization, database, or ledger failure
+failed, token cleared, safe failure category retained
+  -> retry claims with token B
+processing, attempt 2
+```
+
+If a worker disappears while processing, its row remains `processing`. After the
+five-minute lease expires, another worker may claim the event with a new token and
+incremented attempt count. The expired worker's token can no longer finalize the
+row, so it cannot overwrite the reclaiming worker's result.
+
+The provider call and synchronization do not run inside the inbox claim
+transaction. This keeps the database row lock and connection short-lived while
+still making ownership durable across a crash. SQS does not invoke this processor
+yet; current integration tests call it directly.
+
 ### Failure after the first change in a sync page
 
 **Status:** Implemented for complete fake-provider updates. The coordinator fetches
@@ -83,13 +112,13 @@ following retry from that cursor succeeds.
 
 ### Duplicate delivery
 
-**Status:** Sequential duplicate additions, modifications, removals, and pending
-replacements are implemented. An identical payload returns the existing external
-transaction ID without another journal; conflicting data is rejected where the
-event contract
-requires an exact match. Concurrent missing-row races and event/version identities
-remain future boundaries, with the database uniqueness constraint providing final
-provider-identity protection today.
+**Status:** Duplicate webhook intake and sequential duplicate additions,
+modifications, removals, and pending replacements are implemented. Identical
+webhook redelivery returns the existing inbox event, while conflicting reuse of
+the event identity is rejected. An already processed event is a worker no-op, and
+an active processing lease rejects a duplicate worker. Transaction-version
+ordering and concurrent missing-transaction insertion races remain future
+boundaries.
 
 ### Invalid unbalanced journal
 

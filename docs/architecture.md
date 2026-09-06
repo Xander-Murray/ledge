@@ -16,8 +16,10 @@ safe-to-spend estimate.
 
 The first milestones established domain models, ledger operations, PostgreSQL
 persistence, migrations, fake-provider synchronization, and automated tests. A
-small FastAPI boundary now exposes the durable read models. Webhook intake and a
-real Plaid adapter remain the next application milestones before AWS deployment.
+small FastAPI boundary exposes durable read models and accepts normalized provider
+notifications. A leased event processor now joins durable intake to
+synchronization. The real Plaid adapter is the next major application milestone
+before AWS delivery.
 
 ## Current checkpoint non-goals
 
@@ -71,6 +73,9 @@ PostgreSQL constraints, triggers, and migrations
         |
         v
 FastAPI async read endpoints
+        |
+        v
+durable webhook inbox and leased event processor
 ```
 
 Starting with pure functions keeps accounting rules easy to understand and test.
@@ -169,6 +174,50 @@ before applying either event. The local fake-provider coordinator now enforces
 this database boundary; provider-specific pagination mutation errors will be
 handled when the Plaid adapter is introduced.
 
+## Current event-processing boundary
+
+The HTTP request and slower synchronization work are separate operations. The
+normalized webhook endpoint first resolves a provider connection owned by the
+configured user, then inserts an `inbound_events` row. Its unique
+`(transaction_sync_state_id, provider_event_id)` identity makes identical
+redelivery return the existing row; changed data under the same identity is an
+explicit conflict.
+
+```text
+POST normalized notification
+  -> short async transaction
+  -> insert pending event or return identical existing event
+  -> 202 Accepted
+```
+
+`InboundEventProcessor` handles stored work using three boundaries:
+
+```text
+short claim transaction
+  -> status=processing, attempt_count++, new processing_token
+  -> release database connection
+
+provider fetch and atomic synchronization
+  -> no inbox row lock or claim transaction remains open
+
+short finalization transaction
+  -> update only when the processing token still matches
+  -> status=processed or categorized status=failed
+```
+
+An active five-minute lease rejects a duplicate worker. An expired lease can be
+reclaimed with a new token and incremented attempt count. The old worker cannot
+complete or fail the newer claim because finalization checks both status and
+token. This fencing behavior is necessary when an at-least-once queue retries a
+message while an earlier invocation is delayed.
+
+The inbox stores processing start and finish timestamps, attempt count, and a
+bounded failure category rather than raw exception text. Those fields support
+measured processing latency, retry rate, first-attempt success rate, abandoned
+work recovery, and failure counts without storing potentially sensitive error
+messages. SQS delivery, a Lambda handler, and CloudWatch emission are not wired
+yet.
+
 ## Current HTTP boundary
 
 ```text
@@ -183,13 +232,15 @@ receives a short-lived async session through dependency injection. The existing
 synchronous engine and repository remain the write path for synchronization;
 the HTTP layer uses async sessions so database waits do not block the event loop.
 
-The current HTTP surface is intentionally read-only:
+The current HTTP surface has four read routes and one durable intake route:
 
 ```text
 GET /health         service and PostgreSQL readiness
 GET /accounts       configured user's checking, savings, and credit accounts
 GET /transactions   current provider projection with account/status filters
 GET /sync-status    committed cursor state for each provider connection
+POST /webhooks/transactions
+                    accept a normalized transaction notification
 ```
 
 `GET /transactions` orders by most recently updated first and bounds offset
@@ -200,6 +251,10 @@ queryable because visibility is part of the audit story. Resource responses omit
 not authentication; `create_app` accepts an injected UUID so a future auth
 dependency can replace it without changing route queries.
 
-All four endpoints map SQLAlchemy failures to `503` without exposing connection
-details. Unit tests replace the session factory, while integration tests migrate
-and query the real disposable `ledge_test` PostgreSQL database.
+The webhook route accepts only `transactions.updated`, preserves its submitted
+payload object, and returns without running synchronization. It is still a local,
+provider-neutral envelope: Plaid payload translation and signature verification
+remain future adapter responsibilities. All routes map SQLAlchemy failures to
+`503` without exposing connection details. Unit tests replace the session
+factory, while integration tests migrate and query the real disposable
+`ledge_test` PostgreSQL database.
