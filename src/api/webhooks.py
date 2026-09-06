@@ -31,7 +31,7 @@ class TransactionWebhookRequest(BaseModel):
     provider_name: NonEmptyIdentifier
     provider_connection_id: NonEmptyIdentifier
     provider_event_id: NonEmptyIdentifier
-    event_type: NonEmptyIdentifier
+    event_type: Literal["transactions.updated"]
     payload: dict[str, Any]
 
 

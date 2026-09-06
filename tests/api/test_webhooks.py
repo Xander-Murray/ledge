@@ -193,12 +193,15 @@ async def test_webhook_rejects_invalid_envelopes(
     extra_field["unexpected"] = True
     non_object_payload = webhook_payload(provider_event_id="event-array")
     non_object_payload["payload"] = ["not", "an", "object"]
+    unsupported_event = webhook_payload(provider_event_id="event-unsupported")
+    unsupported_event["event_type"] = "accounts.updated"
 
     async for client in api_client_factory(USER_ID):
         responses = [
             await client.post("/webhooks/transactions", json=blank_provider),
             await client.post("/webhooks/transactions", json=extra_field),
             await client.post("/webhooks/transactions", json=non_object_payload),
+            await client.post("/webhooks/transactions", json=unsupported_event),
         ]
 
     assert all(response.status_code == 422 for response in responses)
