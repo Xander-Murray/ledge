@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID, uuid4
 
+import httpx2
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -33,6 +35,7 @@ from persistence.models import (
 )
 from providers.base import TransactionProvider, TransactionSyncPage
 from providers.fake import FakeTransactionProvider
+from providers.plaid import PlaidPaginationMutationError, PlaidTransactionProvider
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROVIDER_FIXTURE = (
@@ -159,6 +162,72 @@ def _synchronize(
         provider_name=PROVIDER_NAME,
         provider_connection_id=PROVIDER_CONNECTION_ID,
     )
+
+
+@pytest.mark.integration
+def test_plaid_mutated_pagination_leaves_database_unchanged_then_retries(
+    synchronization_database: SynchronizationDatabase,
+) -> None:
+    fail = True
+    requested = []
+
+    def respond(request):
+        cursor = json.loads(request.content).get("cursor")
+        requested.append(cursor)
+        if cursor == "page-2" and fail:
+            return httpx2.Response(
+                400, json={"error_code": "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION"}
+            )
+        return httpx2.Response(
+            200,
+            json={
+                "added": [
+                    {
+                        "account_id": "plaid-account",
+                        "transaction_id": "purchase",
+                        "amount": 12.50,
+                        "iso_currency_code": "USD",
+                        "name": "Market",
+                        "pending": False,
+                        "pending_transaction_id": None,
+                    }
+                ]
+                if cursor is None
+                else [],
+                "modified": [],
+                "removed": [],
+                "next_cursor": "page-2" if cursor is None else "finished",
+                "has_more": cursor is None,
+            },
+        )
+
+    with httpx2.Client(transport=httpx2.MockTransport(respond)) as client:
+        provider = PlaidTransactionProvider(
+            client=client,
+            client_id="client",
+            secret="secret",
+            access_token="token",
+            account_ids={"plaid-account": ACCOUNT_ID},
+        )
+        synchronizer = _synchronizer(synchronization_database, provider)
+        with pytest.raises(PlaidPaginationMutationError):
+            _synchronize(synchronizer, synchronization_database.user_id)
+        with synchronization_database.session_factory() as session:
+            assert session.scalar(select(func.count(ExternalTransactionModel.id))) == 0
+            state = session.get(
+                TransactionSyncStateModel, synchronization_database.sync_state_id
+            )
+            assert state.cursor is None
+        fail = False
+        result = _synchronize(synchronizer, synchronization_database.user_id)
+
+    assert requested == [None, "page-2", None, "page-2"]
+    assert result.ending_cursor == "finished"
+    assert result.added_count == 1
+    with synchronization_database.session_factory() as session:
+        stored = session.scalar(select(ExternalTransactionModel))
+        assert stored.amount_cents == 1250
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 1
 
 
 @pytest.mark.integration
