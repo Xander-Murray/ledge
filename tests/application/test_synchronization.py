@@ -23,7 +23,7 @@ from application.synchronization import (
     TransactionSynchronizer,
 )
 from domain.ledger import TransactionNotFoundError
-from domain.models import Transaction
+from domain.models import Transaction, TransactionRemoval
 from persistence.database import create_session_factory
 from persistence.models import (
     ExternalTransactionModel,
@@ -510,3 +510,51 @@ def test_pending_transaction_posts_across_provider_pages_atomically(
             )
             == 2_300
         )
+
+
+@pytest.mark.integration
+def test_posted_transaction_survives_missing_compacted_pending_event(
+    synchronization_database: SynchronizationDatabase,
+) -> None:
+    posted = Transaction(
+        account_id=ACCOUNT_ID,
+        provider_transaction_id="posted-without-observed-pending",
+        amount_cents=1_250,
+        description="Late observed purchase",
+        pending_provider_transaction_id="pending-never-observed",
+    )
+    provider = FakeTransactionProvider(
+        {
+            None: TransactionSyncPage(
+                added=(posted,),
+                modified=(),
+                removed=(
+                    TransactionRemoval(
+                        account_id=ACCOUNT_ID,
+                        provider_transaction_id="pending-never-observed",
+                    ),
+                ),
+                next_cursor="compacted-cursor",
+                has_more=False,
+            )
+        }
+    )
+
+    result = _synchronize(
+        _synchronizer(synchronization_database, provider),
+        synchronization_database.user_id,
+    )
+
+    assert result.ending_cursor == "compacted-cursor"
+    with synchronization_database.session_factory() as session:
+        stored = session.scalar(
+            select(ExternalTransactionModel).where(
+                ExternalTransactionModel.provider_transaction_id
+                == "posted-without-observed-pending"
+            )
+        )
+        assert stored is not None
+        assert stored.pending_provider_transaction_id is None
+        assert stored.status == "active"
+        assert session.scalar(select(func.count(JournalEntryModel.id))) == 1
+        assert session.scalar(select(func.count(PostingModel.id))) == 2

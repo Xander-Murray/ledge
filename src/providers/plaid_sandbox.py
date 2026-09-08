@@ -39,23 +39,34 @@ class PlaidSandboxClient:
         client: httpx2.Client,
         client_id: str,
         secret: str,
+        username: str | None = None,
+        password: str | None = None,
     ) -> None:
         if not client_id.strip() or not secret.strip():
             raise ValueError("Plaid credentials must not be empty")
         self._client = client
         self._credentials = {"client_id": client_id, "secret": secret}
+        if (username is None) != (password is None):
+            raise ValueError("Plaid Sandbox username and password must be paired")
+        if username is not None and (not username.strip() or not password.strip()):
+            raise ValueError("Plaid Sandbox credentials must not be empty")
+        self._user_options = (
+            {"override_username": username, "override_password": password}
+            if username is not None
+            else None
+        )
 
     def create_connection(self, *, institution_id: str) -> PlaidSandboxConnection:
         if not institution_id.strip():
             raise ValueError("Plaid institution ID must not be empty")
 
-        token_payload = self._post(
-            "/sandbox/public_token/create",
-            {
-                "institution_id": institution_id,
-                "initial_products": ["transactions"],
-            },
-        )
+        token_request: dict[str, object] = {
+            "institution_id": institution_id,
+            "initial_products": ["transactions"],
+        }
+        if self._user_options is not None:
+            token_request["options"] = self._user_options
+        token_payload = self._post("/sandbox/public_token/create", token_request)
         public_token = _required_text(token_payload, "public_token")
 
         exchange_payload = self._post(
@@ -65,10 +76,19 @@ class PlaidSandboxClient:
         access_token = _required_text(exchange_payload, "access_token")
         item_id = _required_text(exchange_payload, "item_id")
 
-        accounts_payload = self._post(
-            "/accounts/get",
-            {"access_token": access_token},
+        accounts = self.get_accounts(access_token=access_token)
+
+        return PlaidSandboxConnection(
+            access_token=access_token,
+            item_id=item_id,
+            accounts=accounts,
         )
+
+    def get_accounts(self, *, access_token: str) -> tuple[PlaidAccount, ...]:
+        """Return the current account catalog for a Sandbox Item."""
+        if not access_token.strip():
+            raise ValueError("Plaid access token must not be empty")
+        accounts_payload = self._post("/accounts/get", {"access_token": access_token})
         raw_accounts = accounts_payload.get("accounts")
         if not isinstance(raw_accounts, list):
             raise PlaidSandboxResponseError("Plaid returned invalid account data")
@@ -82,11 +102,13 @@ class PlaidSandboxClient:
         if len({account.provider_account_id for account in accounts}) != len(accounts):
             raise PlaidSandboxResponseError("Plaid returned duplicate account IDs")
 
-        return PlaidSandboxConnection(
-            access_token=access_token,
-            item_id=item_id,
-            accounts=accounts,
-        )
+        return accounts
+
+    def refresh_transactions(self, *, access_token: str) -> None:
+        """Ask Plaid Sandbox to simulate the Item's next institution refresh."""
+        if not access_token.strip():
+            raise ValueError("Plaid access token must not be empty")
+        self._post("/transactions/refresh", {"access_token": access_token})
 
     def _post(self, path: str, body: dict[str, object]) -> dict:
         try:

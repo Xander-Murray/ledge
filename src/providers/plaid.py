@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
-from decimal import Decimal
+from collections.abc import Collection, Mapping
+from decimal import ROUND_HALF_EVEN, Decimal
 from types import MappingProxyType
 from uuid import UUID
 
@@ -37,6 +37,7 @@ class PlaidTransactionProvider:
         secret: str,
         access_token: str,
         account_ids: Mapping[str, UUID],
+        ignored_account_ids: Collection[str] = (),
     ) -> None:
         if any(not value.strip() for value in (client_id, secret, access_token)):
             raise ValueError("Plaid credentials must not be empty")
@@ -45,6 +46,13 @@ class PlaidTransactionProvider:
             for key, value in account_ids.items()
         ):
             raise ValueError("Plaid account mappings require nonempty IDs and UUIDs")
+        ignored_ids = frozenset(ignored_account_ids)
+        if any(
+            not isinstance(value, str) or not value.strip() for value in ignored_ids
+        ):
+            raise ValueError("Ignored Plaid account IDs must be nonempty strings")
+        if ignored_ids.intersection(account_ids):
+            raise ValueError("A Plaid account cannot be both mapped and ignored")
         self._client = client
         self._credentials = {
             "client_id": client_id,
@@ -52,6 +60,7 @@ class PlaidTransactionProvider:
             "access_token": access_token,
         }
         self._account_ids = MappingProxyType(dict(account_ids))
+        self._ignored_account_ids = ignored_ids
 
     def fetch_transaction_updates(self, cursor: str | None) -> TransactionSyncPage:
         body: dict[str, object] = {**self._credentials, "count": 500}
@@ -81,20 +90,27 @@ class PlaidTransactionProvider:
                 == "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION"
             ):
                 raise PlaidPaginationMutationError("Plaid pagination must restart")
+            error_code = payload.get("error_code")
+            if _is_safe_error_code(error_code):
+                raise ProviderError(f"Plaid rejected the sync request ({error_code})")
             raise ProviderError("Plaid rejected the sync request")
 
         try:
             return TransactionSyncPage(
-                added=tuple(self._transaction(row) for row in _rows(payload, "added")),
+                added=tuple(
+                    self._transaction(row)
+                    for row in self._included_rows(payload, "added")
+                ),
                 modified=tuple(
-                    self._transaction(row) for row in _rows(payload, "modified")
+                    self._transaction(row)
+                    for row in self._included_rows(payload, "modified")
                 ),
                 removed=tuple(
                     TransactionRemoval(
                         account_id=self._account(row),
                         provider_transaction_id=_text(row, "transaction_id"),
                     )
-                    for row in _rows(payload, "removed")
+                    for row in self._included_rows(payload, "removed")
                 ),
                 next_cursor=_text(payload, "next_cursor", allow_empty=True),
                 has_more=payload["has_more"],
@@ -103,6 +119,13 @@ class PlaidTransactionProvider:
             raise PlaidResponseError(
                 "Plaid returned invalid transaction data"
             ) from None
+
+    def _included_rows(self, payload: dict, key: str) -> tuple[dict, ...]:
+        return tuple(
+            row
+            for row in _rows(payload, key)
+            if _text(row, "account_id") not in self._ignored_account_ids
+        )
 
     def _account(self, row: dict) -> UUID:
         return self._account_ids[_text(row, "account_id")]
@@ -120,9 +143,8 @@ class PlaidTransactionProvider:
         sign, digits, exponent = decimal_amount.as_tuple()
         assert isinstance(exponent, int)
         cents = Decimal((sign, digits, exponent + 2))
-        if not cents.is_finite() or cents != cents.to_integral_value():
-            raise ValueError("Amount must be exact integer cents")
-        if not -(2**63) < cents < 2**63:
+        rounded_cents = cents.to_integral_value(rounding=ROUND_HALF_EVEN)
+        if not rounded_cents.is_finite() or not -(2**63) < rounded_cents < 2**63:
             raise ValueError("Amount exceeds reversible BIGINT range")
         pending_id = row.get("pending_transaction_id")
         if pending_id is not None:
@@ -130,7 +152,7 @@ class PlaidTransactionProvider:
         return Transaction(
             account_id=self._account(row),
             provider_transaction_id=_text(row, "transaction_id"),
-            amount_cents=int(cents),
+            amount_cents=int(rounded_cents),
             description=_text(row, "name", allow_empty=True),
             is_pending=row["pending"],
             pending_provider_transaction_id=pending_id,
@@ -149,3 +171,14 @@ def _rows(payload: dict, key: str) -> list[dict]:
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
         raise ValueError("Invalid transaction array")
     return rows
+
+
+def _is_safe_error_code(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= 64
+        and all(
+            character.isascii() and (character.isupper() or character == "_")
+            for character in value
+        )
+    )

@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 ledge-plaid-sandbox = "commands.plaid_sandbox:main"
+ledge-plaid-sync = "commands.plaid_sync:main"
 
 [project.optional-dependencies]
 dev = [

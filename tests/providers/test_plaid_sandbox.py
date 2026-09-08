@@ -60,6 +60,53 @@ def test_creates_exchanges_and_loads_a_sandbox_item() -> None:
     assert all(request.headers["Plaid-Version"] == "2020-09-14" for request in requests)
 
 
+def test_dynamic_transaction_profile_is_sent_during_item_creation() -> None:
+    requests = []
+    responses = iter(
+        [
+            {"public_token": "public-token"},
+            {"access_token": "access-token", "item_id": "item-1"},
+            {"accounts": []},
+        ]
+    )
+
+    def respond(request):
+        requests.append(request)
+        return httpx2.Response(200, json=next(responses))
+
+    with httpx2.Client(transport=httpx2.MockTransport(respond)) as client:
+        PlaidSandboxClient(
+            client=client,
+            client_id="client-id",
+            secret="sandbox-secret",
+            username="user_transactions_dynamic",
+            password="pass_good",
+        ).create_connection(institution_id="ins_109508")
+
+    assert json.loads(requests[0].content)["options"] == {
+        "override_username": "user_transactions_dynamic",
+        "override_password": "pass_good",
+    }
+
+
+def test_requests_a_real_plaid_transaction_refresh() -> None:
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx2.Response(200, json={"request_id": "request-1"})
+
+    with httpx2.Client(transport=httpx2.MockTransport(respond)) as client:
+        PlaidSandboxClient(
+            client=client,
+            client_id="client-id",
+            secret="sandbox-secret",
+        ).refresh_transactions(access_token="access-token")
+
+    assert requests[0].url.path == "/transactions/refresh"
+    assert json.loads(requests[0].content)["access_token"] == "access-token"
+
+
 @pytest.mark.parametrize(
     "response",
     [

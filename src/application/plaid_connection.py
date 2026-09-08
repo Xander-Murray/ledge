@@ -57,7 +57,7 @@ class PlaidSandboxConnector:
         supported_accounts = tuple(
             (account, account_type)
             for account in connection.accounts
-            if (account_type := _ledge_account_type(account)) is not None
+            if (account_type := ledge_account_type(account)) is not None
         )
         if not supported_accounts:
             raise NoSupportedPlaidAccountsError(
@@ -144,7 +144,7 @@ def load_plaid_account_ids(
     }
 
 
-def _ledge_account_type(account: PlaidAccount) -> str | None:
+def ledge_account_type(account: PlaidAccount) -> str | None:
     if account.account_type == "depository" and account.account_subtype in {
         "checking",
         "savings",

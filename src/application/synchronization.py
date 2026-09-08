@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.sql import Select
 
+from domain.ledger import TransactionNotFoundError
 from persistence.models import TransactionSyncStateModel
 from persistence.repository import LedgerRepository
 from providers.base import TransactionProvider, TransactionSyncPage
@@ -105,10 +106,22 @@ class TransactionSynchronizer:
                             transaction=transaction,
                         )
                     else:
-                        repository.replace_pending_transaction(
-                            user_id=user_id,
-                            posted_transaction=transaction,
-                        )
+                        try:
+                            repository.replace_pending_transaction(
+                                user_id=user_id,
+                                posted_transaction=transaction,
+                            )
+                        except TransactionNotFoundError:
+                            # Plaid can compact away a pending event between
+                            # polls. The posted transaction is still valid, but
+                            # there is no local row whose history can be linked.
+                            repository.add_transaction(
+                                user_id=user_id,
+                                transaction=replace(
+                                    transaction,
+                                    pending_provider_transaction_id=None,
+                                ),
+                            )
                 for transaction in page.modified:
                     repository.modify_transaction(
                         user_id=user_id,

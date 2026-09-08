@@ -48,6 +48,65 @@ def adapter(client):
     )
 
 
+def test_ignores_only_explicitly_unsupported_accounts():
+    with httpx2.Client(
+        transport=httpx2.MockTransport(
+            lambda request: httpx2.Response(
+                200,
+                json=page(
+                    added=[transaction(account_id="unsupported")],
+                    modified=[transaction(account_id="unsupported")],
+                    removed=[
+                        {"account_id": "unsupported", "transaction_id": "gone"}
+                    ],
+                ),
+            )
+        )
+    ) as client:
+        result = PlaidTransactionProvider(
+            client=client,
+            client_id="test-client",
+            secret="test-secret",
+            access_token="test-access-token",
+            account_ids={"plaid-account": ACCOUNT},
+            ignored_account_ids={"unsupported"},
+        ).fetch_transaction_updates(None)
+
+    assert result.added == ()
+    assert result.modified == ()
+    assert result.removed == ()
+
+
+def test_rejects_accounts_that_are_neither_mapped_nor_explicitly_ignored():
+    with (
+        httpx2.Client(
+            transport=httpx2.MockTransport(
+                lambda request: httpx2.Response(
+                    200,
+                    json=page(added=[transaction(account_id="unknown")]),
+                )
+            )
+        ) as client,
+        pytest.raises(PlaidResponseError),
+    ):
+        adapter(client).fetch_transaction_updates(None)
+
+
+def test_account_cannot_be_both_mapped_and_ignored():
+    with (
+        httpx2.Client(transport=httpx2.MockTransport(lambda request: None)) as client,
+        pytest.raises(ValueError, match="both mapped and ignored"),
+    ):
+        PlaidTransactionProvider(
+            client=client,
+            client_id="test-client",
+            secret="test-secret",
+            access_token="test-access-token",
+            account_ids={"plaid-account": ACCOUNT},
+            ignored_account_ids={"plaid-account"},
+        )
+
+
 def test_normalizes_all_changes_and_sends_sandbox_request():
     requests = []
 
@@ -86,7 +145,6 @@ def test_normalizes_all_changes_and_sends_sandbox_request():
 @pytest.mark.parametrize(
     "changes",
     [
-        {"amount": 1.001},
         {"amount": True},
         {"amount": "12.50"},
         {"amount": 1e30},
@@ -148,7 +206,11 @@ def test_http_failure_does_not_expose_provider_body():
         httpx2.Client(
             transport=httpx2.MockTransport(
                 lambda request: httpx2.Response(
-                    401, json={"error_message": "test-secret"}
+                    401,
+                    json={
+                        "error_code": "INVALID_API_KEYS",
+                        "error_message": "test-secret",
+                    },
                 )
             )
         ) as client,
@@ -156,6 +218,7 @@ def test_http_failure_does_not_expose_provider_body():
     ):
         adapter(client).fetch_transaction_updates(None)
     assert "test-secret" not in str(error.value)
+    assert "INVALID_API_KEYS" in str(error.value)
 
 
 def test_network_failure_is_categorized_without_request_details():
@@ -170,16 +233,25 @@ def test_network_failure_is_categorized_without_request_details():
     assert "test-secret" not in str(error.value)
 
 
-def test_rejects_fractional_cents_beyond_default_decimal_precision():
-    raw = json.dumps(page(added=[transaction()])).replace(
-        "12.5", "12.50000000000000000000000000000001"
-    )
-    with (
-        httpx2.Client(
-            transport=httpx2.MockTransport(
-                lambda request: httpx2.Response(200, content=raw)
-            )
-        ) as client,
-        pytest.raises(PlaidResponseError),
-    ):
-        adapter(client).fetch_transaction_updates(None)
+@pytest.mark.parametrize(
+    ("raw_amount", "expected_cents"),
+    [
+        ("1.005", 100),
+        ("1.015", 102),
+        ("-1.005", -100),
+        ("12.50000000000000000000000000000001", 1250),
+    ],
+)
+def test_rounds_provider_amounts_to_cents_without_binary_float_error(
+    raw_amount,
+    expected_cents,
+):
+    raw = json.dumps(page(added=[transaction()])).replace("12.5", raw_amount)
+    with httpx2.Client(
+        transport=httpx2.MockTransport(
+            lambda request: httpx2.Response(200, content=raw)
+        )
+    ) as client:
+        result = adapter(client).fetch_transaction_updates(None)
+
+    assert result.added[0].amount_cents == expected_cents

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from collections.abc import Mapping
 from pathlib import Path
+from uuid import UUID
 
 import httpx2
 
@@ -26,10 +28,13 @@ class PlaidSandboxConfigurationError(RuntimeError):
     """A required Plaid Sandbox setting is absent."""
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """Bootstrap one Sandbox Item for the configured single-user instance."""
+    arguments = _parse_arguments(argv)
     config = _load_config(os.environ)
-    token_file = Path(os.environ.get("LEDGE_PLAID_TOKEN_FILE", DEFAULT_TOKEN_FILE))
+    token_file = arguments.token_file or Path(
+        os.environ.get("LEDGE_PLAID_TOKEN_FILE", DEFAULT_TOKEN_FILE)
+    )
     if token_file.exists():
         raise PlaidSandboxConfigurationError(
             f"Refusing to overwrite existing token file {token_file}"
@@ -43,10 +48,16 @@ def main() -> None:
                     client=client,
                     client_id=config["client_id"],
                     secret=config["secret"],
+                    username=(
+                        "user_transactions_dynamic"
+                        if arguments.dynamic_transactions
+                        else None
+                    ),
+                    password=("pass_good" if arguments.dynamic_transactions else None),
                 ),
             )
             result = connector.connect(
-                user_id=get_configured_user_id(),
+                user_id=arguments.user_id or get_configured_user_id(),
                 institution_id=config["institution_id"],
             )
     finally:
@@ -62,6 +73,28 @@ def main() -> None:
     print(f"Accounts imported: {result.imported_account_count}")
     print(f"Accounts skipped: {result.skipped_account_count}")
     print(f"Sandbox token saved with owner-only permissions: {token_file}")
+
+
+def _parse_arguments(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Create and persist a real Plaid Sandbox Item."
+    )
+    parser.add_argument(
+        "--dynamic-transactions",
+        action="store_true",
+        help="use Plaid's realistic, refreshable Transactions test profile",
+    )
+    parser.add_argument(
+        "--user-id",
+        type=UUID,
+        help="override LEDGE_USER_ID for an isolated Sandbox profile",
+    )
+    parser.add_argument(
+        "--token-file",
+        type=Path,
+        help="override the protected output token file",
+    )
+    return parser.parse_args(argv)
 
 
 def _load_config(environ: Mapping[str, str]) -> dict[str, str]:

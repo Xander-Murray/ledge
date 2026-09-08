@@ -7,6 +7,7 @@ from commands.plaid_sandbox import (
     DEFAULT_INSTITUTION_ID,
     PlaidSandboxConfigurationError,
     _load_config,
+    _parse_arguments,
     _write_connection_secret,
 )
 
@@ -53,3 +54,21 @@ def test_connection_secret_is_created_with_owner_only_permissions(tmp_path) -> N
             access_token="replacement-token",
             item_id="item-2",
         )
+
+def test_dynamic_profile_can_use_isolated_identity_and_token_file(tmp_path) -> None:
+    user_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    token_file = tmp_path / "dynamic.json"
+
+    arguments = _parse_arguments(
+        [
+            "--dynamic-transactions",
+            "--user-id",
+            user_id,
+            "--token-file",
+            str(token_file),
+        ]
+    )
+
+    assert arguments.dynamic_transactions is True
+    assert str(arguments.user_id) == user_id
+    assert arguments.token_file == token_file
