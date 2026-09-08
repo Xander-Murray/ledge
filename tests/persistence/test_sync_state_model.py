@@ -57,6 +57,10 @@ def test_sync_state_enforces_owner_and_provider_connection_identity() -> None:
         "provider_name",
         "provider_connection_id",
     )
+    assert unique_constraints["uq_transaction_sync_states_ownership"] == (
+        "id",
+        "user_id",
+    )
     assert check_names == {
         "ck_transaction_sync_states_provider_connection_id_nonempty",
         "ck_transaction_sync_states_provider_name_nonempty",

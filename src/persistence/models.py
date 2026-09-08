@@ -104,6 +104,11 @@ class FinancialAccountModel(Base):
         back_populates="account"
     )
 
+    provider_mappings: Mapped[list[ProviderAccountMappingModel]] = relationship(
+        back_populates="financial_account",
+        overlaps="account_mappings,sync_state",
+    )
+
 
 class TransactionSyncStateModel(Base):
     """Durable progress for one provider transaction-update stream."""
@@ -123,6 +128,11 @@ class TransactionSyncStateModel(Base):
             "provider_name",
             "provider_connection_id",
             name="uq_transaction_sync_states_provider_connection",
+        ),
+        UniqueConstraint(
+            "id",
+            "user_id",
+            name="uq_transaction_sync_states_ownership",
         ),
     )
 
@@ -158,6 +168,73 @@ class TransactionSyncStateModel(Base):
 
     inbound_events: Mapped[list[InboundEventModel]] = relationship(
         back_populates="sync_state"
+    )
+
+    account_mappings: Mapped[list[ProviderAccountMappingModel]] = relationship(
+        back_populates="sync_state",
+        overlaps="financial_account,provider_mappings",
+    )
+
+
+class ProviderAccountMappingModel(Base):
+    """Maps one provider account identifier to one Ledge account."""
+
+    __tablename__ = "provider_account_mappings"
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(provider_account_id)) > 0",
+            name="provider_account_id_nonempty",
+        ),
+        ForeignKeyConstraint(
+            ["transaction_sync_state_id", "user_id"],
+            ["transaction_sync_states.id", "transaction_sync_states.user_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["financial_account_id", "user_id"],
+            ["financial_accounts.id", "financial_accounts.user_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "transaction_sync_state_id",
+            "provider_account_id",
+            name="uq_provider_account_mappings_provider_account",
+        ),
+        UniqueConstraint(
+            "financial_account_id",
+            name="uq_provider_account_mappings_financial_account",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+
+    user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+
+    transaction_sync_state_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        nullable=False,
+        index=True,
+    )
+
+    financial_account_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+
+    provider_account_id: Mapped[str] = mapped_column(nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    sync_state: Mapped[TransactionSyncStateModel] = relationship(
+        back_populates="account_mappings",
+        overlaps="financial_account,provider_mappings",
+    )
+
+    financial_account: Mapped[FinancialAccountModel] = relationship(
+        back_populates="provider_mappings",
+        overlaps="account_mappings,sync_state",
     )
 
 

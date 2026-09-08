@@ -44,6 +44,7 @@ def test_migrations_upgrade_and_downgrade(
             "inbound_events",
             "journal_entries",
             "postings",
+            "provider_account_mappings",
             "transaction_sync_states",
             "users",
         }

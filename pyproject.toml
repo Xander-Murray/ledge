@@ -16,6 +16,9 @@ dependencies = [
     "uvicorn>=0.52,<1",
 ]
 
+[project.scripts]
+ledge-plaid-sandbox = "commands.plaid_sandbox:main"
+
 [project.optional-dependencies]
 dev = [
     "alembic>=1.14,<2",

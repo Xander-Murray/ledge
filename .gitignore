@@ -8,6 +8,7 @@ __pycache__/
 .coverage
 htmlcov/
 .env
+/.ledge/
 .idea/
 .vscode/
 /database-diagram.md
