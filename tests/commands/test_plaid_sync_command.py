@@ -1,16 +1,49 @@
+from unittest.mock import Mock
 from uuid import UUID
 
 import pytest
 
+from application.synchronization import SyncResult, TransactionSynchronizer
 from commands.plaid_sync import (
     PlaidAccountCatalogError,
     _cursor_status,
     _ignored_account_ids,
     _parse_arguments,
+    _run_cycle,
 )
 from providers.plaid_sandbox import PlaidAccount
 
 MAPPED_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+
+def test_cycle_reports_committed_sync_without_claiming_a_ledger_audit(capsys) -> None:
+    synchronizer = Mock(spec=TransactionSynchronizer)
+    synchronizer.synchronize.return_value = SyncResult(
+        starting_cursor="first",
+        ending_cursor="second",
+        pages_fetched=1,
+        added_count=0,
+        modified_count=0,
+        removed_count=0,
+    )
+
+    _run_cycle(
+        cycle=1,
+        cycle_count=1,
+        user_id=MAPPED_ID,
+        item_id="item-1",
+        synchronizer=synchronizer,
+    )
+
+    synchronizer.synchronize.assert_called_once_with(
+        user_id=MAPPED_ID,
+        provider_name="plaid",
+        provider_connection_id="item-1",
+    )
+    output = capsys.readouterr().out
+    assert "+0 ~0 -0" in output
+    assert "advanced and saved" in output
+    assert "PASS" not in output
 
 
 def account(provider_id: str, account_type: str, subtype: str) -> PlaidAccount:

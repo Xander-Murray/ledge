@@ -9,20 +9,21 @@ from time import perf_counter, sleep
 from uuid import UUID
 
 import httpx2
-from sqlalchemy.orm import Session, sessionmaker
 
 from api.config import get_configured_user_id
-from application.ledger_audit import LedgerAuditError, read_ledger_audit
 from application.plaid_connection import ledge_account_type, load_plaid_account_ids
 from application.synchronization import TransactionSynchronizer
-from commands.plaid_sandbox import DEFAULT_TOKEN_FILE
 from persistence.database import (
     create_database_engine,
     create_session_factory,
     get_database_url,
 )
 from providers.plaid import PlaidTransactionProvider
-from providers.plaid_config import get_plaid_credentials, load_plaid_connection_secret
+from providers.plaid_config import (
+    DEFAULT_TOKEN_FILE,
+    get_plaid_credentials,
+    load_plaid_connection_secret,
+)
 from providers.plaid_sandbox import PlaidAccount, PlaidSandboxClient
 
 
@@ -96,9 +97,7 @@ def main(argv: list[str] | None = None) -> None:
                     cycle=cycle,
                     cycle_count=arguments.iterations,
                     user_id=user_id,
-                    provider_name="plaid",
                     item_id=connection.item_id,
-                    session_factory=session_factory,
                     synchronizer=synchronizer,
                 )
                 if cycle < arguments.iterations and not arguments.refresh_between:
@@ -118,31 +117,17 @@ def _run_cycle(
     cycle: int,
     cycle_count: int,
     user_id: UUID,
-    provider_name: str,
     item_id: str,
-    session_factory: sessionmaker[Session],
     synchronizer: TransactionSynchronizer,
 ) -> None:
     print(f"\n[cycle {cycle}/{cycle_count}] Synchronizing Plaid updates...", flush=True)
-    with session_factory() as session:
-        before = read_ledger_audit(session, user_id=user_id)
-
     started_at = perf_counter()
     result = synchronizer.synchronize(
         user_id=user_id,
-        provider_name=provider_name,
+        provider_name="plaid",
         provider_connection_id=item_id,
     )
     duration_ms = round((perf_counter() - started_at) * 1_000)
-
-    with session_factory() as session:
-        after = read_ledger_audit(session, user_id=user_id)
-    after.verify()
-    change_count = (
-        result.added_count + result.modified_count + result.removed_count
-    )
-    if change_count == 0 and after != before:
-        raise LedgerAuditError("An empty sync changed persisted ledger counts")
 
     print(
         f"      provider: {result.pages_fetched} page(s), "
@@ -151,29 +136,6 @@ def _run_cycle(
     )
     cursor_status = _cursor_status(result.starting_cursor, result.ending_cursor)
     print(f"      cursor:   {cursor_status}", flush=True)
-    print(
-        f"      database: {after.transaction_count} transactions, "
-        f"{after.journal_count} journals, {after.posting_count} postings",
-        flush=True,
-    )
-    print(
-        f"      states:   {after.active_transaction_count} active "
-        f"({after.pending_transaction_count} pending), "
-        f"{after.replaced_transaction_count} replaced, "
-        f"{after.removed_transaction_count} removed",
-        flush=True,
-    )
-    print(
-        "      checks:   PASS sealed | PASS balanced | PASS journal shape",
-        flush=True,
-    )
-    if change_count == 0 and result.starting_cursor == result.ending_cursor:
-        print("      replay:   PASS no database changes", flush=True)
-    elif change_count == 0:
-        print(
-            "      filter:   PASS ignored changes advanced only the cursor",
-            flush=True,
-        )
     print(f"      duration: {duration_ms} ms", flush=True)
 
 

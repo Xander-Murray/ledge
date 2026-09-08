@@ -8,6 +8,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+DEFAULT_TOKEN_FILE = Path(".ledge/plaid-sandbox.json")
+
 
 class PlaidConfigurationError(RuntimeError):
     """Plaid runtime credentials or connection secrets are unsafe or invalid."""

@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from collections.abc import Mapping
 from pathlib import Path
 from uuid import UUID
 
@@ -18,25 +17,30 @@ from persistence.database import (
     create_session_factory,
     get_database_url,
 )
+from providers.plaid_config import (
+    DEFAULT_TOKEN_FILE,
+    PlaidConfigurationError,
+    get_plaid_credentials,
+)
 from providers.plaid_sandbox import PlaidSandboxClient
 
 DEFAULT_INSTITUTION_ID = "ins_109508"
-DEFAULT_TOKEN_FILE = Path(".ledge/plaid-sandbox.json")
-
-
-class PlaidSandboxConfigurationError(RuntimeError):
-    """A required Plaid Sandbox setting is absent."""
 
 
 def main(argv: list[str] | None = None) -> None:
     """Bootstrap one Sandbox Item for the configured single-user instance."""
     arguments = _parse_arguments(argv)
-    config = _load_config(os.environ)
+    credentials = get_plaid_credentials(os.environ)
+    institution_id = os.environ.get(
+        "PLAID_INSTITUTION_ID", DEFAULT_INSTITUTION_ID
+    ).strip()
+    if not institution_id:
+        raise PlaidConfigurationError("PLAID_INSTITUTION_ID is missing or empty")
     token_file = arguments.token_file or Path(
         os.environ.get("LEDGE_PLAID_TOKEN_FILE", DEFAULT_TOKEN_FILE)
     )
     if token_file.exists():
-        raise PlaidSandboxConfigurationError(
+        raise PlaidConfigurationError(
             f"Refusing to overwrite existing token file {token_file}"
         )
     engine = create_database_engine(get_database_url())
@@ -46,8 +50,8 @@ def main(argv: list[str] | None = None) -> None:
                 session_factory=create_session_factory(engine),
                 plaid=PlaidSandboxClient(
                     client=client,
-                    client_id=config["client_id"],
-                    secret=config["secret"],
+                    client_id=credentials.client_id,
+                    secret=credentials.secret,
                     username=(
                         "user_transactions_dynamic"
                         if arguments.dynamic_transactions
@@ -58,7 +62,7 @@ def main(argv: list[str] | None = None) -> None:
             )
             result = connector.connect(
                 user_id=arguments.user_id or get_configured_user_id(),
-                institution_id=config["institution_id"],
+                institution_id=institution_id,
             )
     finally:
         engine.dispose()
@@ -95,25 +99,6 @@ def _parse_arguments(argv: list[str] | None) -> argparse.Namespace:
         help="override the protected output token file",
     )
     return parser.parse_args(argv)
-
-
-def _load_config(environ: Mapping[str, str]) -> dict[str, str]:
-    values = {
-        "client_id": environ.get("PLAID_CLIENT_ID", "").strip(),
-        "secret": environ.get("PLAID_SECRET", "").strip(),
-        "institution_id": environ.get(
-            "PLAID_INSTITUTION_ID", DEFAULT_INSTITUTION_ID
-        ).strip(),
-    }
-    missing = [key for key, value in values.items() if not value]
-    if missing:
-        variable = {
-            "client_id": "PLAID_CLIENT_ID",
-            "secret": "PLAID_SECRET",
-            "institution_id": "PLAID_INSTITUTION_ID",
-        }[missing[0]]
-        raise PlaidSandboxConfigurationError(f"{variable} is missing or empty")
-    return values
 
 
 def _write_connection_secret(

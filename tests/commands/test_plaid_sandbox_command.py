@@ -4,33 +4,20 @@ import stat
 import pytest
 
 from commands.plaid_sandbox import (
-    DEFAULT_INSTITUTION_ID,
-    PlaidSandboxConfigurationError,
-    _load_config,
     _parse_arguments,
     _write_connection_secret,
+    main,
 )
+from providers.plaid_config import PlaidConfigurationError
 
 
-def test_load_config_uses_default_sandbox_institution() -> None:
-    config = _load_config(
-        {"PLAID_CLIENT_ID": " client ", "PLAID_SECRET": " secret "}
-    )
+def test_bootstrap_rejects_empty_institution_before_connecting(monkeypatch) -> None:
+    monkeypatch.setenv("PLAID_CLIENT_ID", "client")
+    monkeypatch.setenv("PLAID_SECRET", "secret")
+    monkeypatch.setenv("PLAID_INSTITUTION_ID", " ")
 
-    assert config == {
-        "client_id": "client",
-        "secret": "secret",
-        "institution_id": DEFAULT_INSTITUTION_ID,
-    }
-
-
-@pytest.mark.parametrize("missing", ["PLAID_CLIENT_ID", "PLAID_SECRET"])
-def test_load_config_requires_credentials(missing: str) -> None:
-    environ = {"PLAID_CLIENT_ID": "client", "PLAID_SECRET": "secret"}
-    del environ[missing]
-
-    with pytest.raises(PlaidSandboxConfigurationError, match=missing):
-        _load_config(environ)
+    with pytest.raises(PlaidConfigurationError, match="PLAID_INSTITUTION_ID"):
+        main([])
 
 
 def test_connection_secret_is_created_with_owner_only_permissions(tmp_path) -> None:
