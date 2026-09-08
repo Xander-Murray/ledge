@@ -1,13 +1,14 @@
 # Transaction lifecycles
 
 These examples describe current and planned lifecycle behavior. The pure domain,
-PostgreSQL repository, and fake-provider synchronization support addition,
-modification, removal, and pending-to-posted replacement. Provider versions are
-still planned.
+PostgreSQL repository, deterministic adapter, and real Plaid Sandbox adapter
+support addition, modification, removal, and pending-to-posted replacement.
+Provider versions are still planned.
 
 ## Pending purchase becomes posted
 
-**Status:** Implemented through the fake-provider synchronization pipeline.
+**Status:** Implemented through deterministic and real Plaid Sandbox
+synchronization.
 
 ```text
 pending `pending-1` v1 added for 2,000 cents
@@ -27,6 +28,11 @@ one provider update. Ledge fetches every page before writing, recognizes the
 posted transaction's pending reference, and performs one reversal. The separate
 removal is consumed as part of that replacement. Repeating the replacement
 returns the same result without appending more journal entries.
+
+Plaid sometimes compacts the original pending row before Ledge has seen it. When
+a posted addition references only that missing pending identity, Ledge imports the
+posted transaction normally instead of failing the complete batch. This narrow
+provider-compatibility rule does not apply to missing modifications or removals.
 
 ## Posted amount changes
 
@@ -105,10 +111,27 @@ yet; current integration tests call it directly.
 
 ### Failure after the first change in a sync page
 
-**Status:** Implemented for complete fake-provider updates. The coordinator fetches
-every page, then writes all ledger changes and the final cursor in one transaction.
+**Status:** Implemented for complete deterministic and Plaid provider updates. The
+coordinator fetches every page, then writes all ledger changes and the final cursor
+in one transaction.
 An injected mid-batch failure leaves the old cursor and no partial journals; a
 following retry from that cursor succeeds.
+
+### Real Sandbox refresh cycle
+
+**Status:** Implemented through `ledge-plaid-sync`.
+
+```text
+load owner-only Item token and durable account mappings
+  -> fetch every /transactions/sync page from the committed cursor
+  -> normalize USD amounts and provider identities
+  -> atomically apply all changes and save the ending cursor
+  -> print page/change counts, cursor outcome, and elapsed time
+```
+
+With `--refresh-between`, cycles after the first ask Plaid Sandbox to generate a
+new transaction update before polling again. Without a provider-side refresh,
+repeated polling is intentionally a no-op and demonstrates cursor idempotency.
 
 ### Duplicate delivery
 

@@ -36,7 +36,9 @@ replace provider identifiers used for synchronization and duplicate detection.
 ## Money and postings
 
 All money is represented in integer cents. Binary floating point never enters the
-domain or database.
+domain or database. The Plaid adapter parses JSON amounts as decimal values and
+rounds to the nearest cent with round-half-even before constructing a
+`Transaction`.
 
 Ledge uses this sign convention:
 
@@ -127,6 +129,13 @@ PostgreSQL distributes the durable state across:
 external_transactions  mutable current provider projection
 journal_entries        immutable accounting events after sealing
 postings               ordered debit and credit lines
+```
+
+Provider identity lives beside, rather than inside, this domain snapshot:
+
+```text
+transaction_sync_states       one provider Item and its committed cursor
+provider_account_mappings     Plaid account ID -> Ledge account UUID
 ```
 
 Repository operations load only the rows needed for a transition, call the same

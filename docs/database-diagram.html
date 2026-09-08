@@ -182,7 +182,6 @@
       --panel: #fffdf7;
       --line: #d7d1bf;
     }
-
     html { background: var(--paper); }
     body {
       box-sizing: border-box;
@@ -249,10 +248,10 @@
 <h1 class="title">Ledge Codebase Map</h1>
 </header>
 <h1 id="ledge-codebase-map">Ledge Codebase Map</h1>
-<p>This is a local, gitignored source for the rendered codebase guide.
-It describes the current code, durable PostgreSQL design, local API, and
-leased event pipeline. The Python source and Alembic migrations remain
-authoritative.</p>
+<p>This is the local source for the rendered codebase guide. It
+describes the current code, durable PostgreSQL design, local API, leased
+event pipeline, and real Plaid Sandbox integration. Python source and
+Alembic migrations remain authoritative.</p>
 <p>Mermaid diagrams render directly in Obsidian and GitHub-flavored
 Markdown viewers. In VS Code, open Markdown Preview with
 <code>Ctrl+Shift+V</code> after installing Mermaid preview support if
@@ -273,7 +272,7 @@ your Markdown renderer does not already include it.</p>
     %% External sources and entry points
     subgraph external[External world]
         fixture[Normalized JSON fixtures]:::done
-        plaid[Plaid Sandbox]:::next
+        plaid[Plaid Sandbox API]:::done
         webhook[Normalized webhook request]:::done
     end
 
@@ -281,7 +280,7 @@ your Markdown renderer does not already include it.</p>
     subgraph provider[Provider boundary]
         protocol[TransactionProvider protocol]:::done
         fake[FakeTransactionProvider]:::done
-        plaid_adapter[Future Plaid adapter]:::future
+        plaid_adapter[PlaidTransactionProvider]:::done
         page[TransactionSyncPage&lt;br/&gt;added / modified / removed&lt;br/&gt;next_cursor / has_more]:::done
     end
 
@@ -291,6 +290,7 @@ your Markdown renderer does not already include it.</p>
         cursor[Durable sync cursor schema]:::done
         inbox[Durable inbound-event inbox]:::done
         processor[Leased event processor]:::done
+        bootstrap[Plaid account bootstrap]:::done
     end
 
     %% These accounting and lifecycle rules are independent of infrastructure.
@@ -309,6 +309,7 @@ your Markdown renderer does not already include it.</p>
         orm[SQLAlchemy models]:::done
         alembic[Alembic migrations]:::done
         postgres[(PostgreSQL)]:::done
+        mappings[Provider account mappings]:::done
     end
 
     %% The current local HTTP boundary exposes database read models.
@@ -340,6 +341,9 @@ your Markdown renderer does not already include it.</p>
     webhook_route --&gt; inbox
     inbox --&gt; processor
     processor --&gt; sync
+    plaid --&gt; bootstrap
+    bootstrap --&gt; mappings
+    mappings --&gt; cursor
     sync --&gt; transitions
     sync --&gt; repository
     transaction --&gt; transitions
@@ -378,6 +382,11 @@ imports SQLAlchemy, FastAPI, Plaid, or AWS libraries.</p>
     ledger[src/domain/ledger.py&lt;br/&gt;journal factories and transitions]
     provider_base[src/providers/base.py&lt;br/&gt;sync page and provider protocol]
     provider_fake[src/providers/fake.py&lt;br/&gt;deterministic fixture adapter]
+    provider_plaid[src/providers/plaid.py&lt;br/&gt;Plaid transaction adapter]
+    provider_sandbox[src/providers/plaid_sandbox.py&lt;br/&gt;Sandbox Item client]
+    plaid_config[src/providers/plaid_config.py&lt;br/&gt;credential and token validation]
+    plaid_connection[src/application/plaid_connection.py&lt;br/&gt;account bootstrap and mappings]
+    plaid_commands[src/commands/plaid_*.py&lt;br/&gt;local pipeline CLIs]
     event_processor[src/application/event_processing.py&lt;br/&gt;leased event worker]
     db[src/persistence/database.py&lt;br/&gt;engine and session factory]
     orm[src/persistence/models.py&lt;br/&gt;relational mappings]
@@ -394,6 +403,14 @@ imports SQLAlchemy, FastAPI, Plaid, or AWS libraries.</p>
     provider_base --&gt; models
     provider_fake --&gt; provider_base
     provider_fake --&gt; models
+    provider_plaid --&gt; provider_base
+    provider_plaid --&gt; models
+    provider_sandbox --&gt; plaid_connection
+    plaid_config --&gt; plaid_commands
+    plaid_connection --&gt; orm
+    plaid_commands --&gt; provider_plaid
+    plaid_commands --&gt; provider_sandbox
+    plaid_commands --&gt; plaid_connection
     event_processor --&gt; provider_base
     event_processor --&gt; repo
     event_processor --&gt; orm
@@ -418,6 +435,15 @@ event should create.</li>
 data looks like to Ledge.</li>
 <li><code>providers/fake.py</code> supplies repeatable pages without
 credentials or networking.</li>
+<li><code>providers/plaid.py</code> normalizes real
+<code>/transactions/sync</code> responses into the provider-neutral page
+contract.</li>
+<li><code>providers/plaid_sandbox.py</code> and
+<code>application/plaid_connection.py</code> create a Sandbox Item,
+import supported accounts, and persist their mappings.</li>
+<li><code>commands/plaid_sandbox.py</code> and
+<code>commands/plaid_sync.py</code> expose a visible local pipeline
+exercise without moving accounting rules into the CLI.</li>
 <li><code>application/event_processing.py</code> claims inbox rows, runs
 synchronization outside the claim transaction, and finalizes only with
 the current attempt token.</li>
@@ -543,6 +569,8 @@ relationship diagram</h2>
     USERS ||--o{ FINANCIAL_ACCOUNTS : owns
     USERS ||--o{ TRANSACTION_SYNC_STATES : owns
     TRANSACTION_SYNC_STATES ||--o{ INBOUND_EVENTS : receives
+    TRANSACTION_SYNC_STATES ||--o{ PROVIDER_ACCOUNT_MAPPINGS : maps
+    FINANCIAL_ACCOUNTS ||--o| PROVIDER_ACCOUNT_MAPPINGS : identifies
     FINANCIAL_ACCOUNTS ||--o{ EXTERNAL_TRANSACTIONS : contains
     EXTERNAL_TRANSACTIONS ||--o{ JOURNAL_ENTRIES : records
     JOURNAL_ENTRIES ||--o{ POSTINGS : contains
@@ -576,6 +604,15 @@ relationship diagram</h2>
         TIMESTAMPTZ received_at
         TIMESTAMPTZ processed_at
         VARCHAR last_error_code
+    }
+
+    PROVIDER_ACCOUNT_MAPPINGS {
+        UUID id PK
+        UUID user_id FK
+        UUID transaction_sync_state_id FK
+        UUID financial_account_id FK
+        VARCHAR provider_account_id
+        TIMESTAMPTZ created_at
     }
 
     FINANCIAL_ACCOUNTS {
@@ -625,6 +662,8 @@ connection’s committed cursor.</li>
 <li><code>inbound_events</code> preserves accepted payloads and durable
 processing ownership, retries, timings, and bounded failure
 categories.</li>
+<li><code>provider_account_mappings</code> joins provider account IDs to
+Ledge accounts under the same user and provider connection.</li>
 <li><code>financial_accounts</code> represents checking, savings, and
 credit accounts.</li>
 <li><code>external_transactions</code> is mutable current provider
@@ -665,6 +704,8 @@ history.</li>
 <li>Event lifecycle checks keep pending, processing, processed, and
 failed metadata internally consistent; provider event identity is unique
 within one sync state.</li>
+<li>Composite ownership constraints prevent mappings from joining a
+provider Item and financial account belonging to different users.</li>
 </ul>
 <h2 id="migration-history">Migration history</h2>
 <pre class="mermaid"><code>flowchart LR
@@ -676,8 +717,9 @@ within one sync state.</li>
     m6[Migration 6&lt;br/&gt;pending-to-posted replacement]
     m7[Migration 7&lt;br/&gt;durable inbound-event inbox]
     m8[Migration 8&lt;br/&gt;processing leases and metrics]
+    m9[Migration 9&lt;br/&gt;provider account mappings]
 
-    m1 --&gt; m2 --&gt; m3 --&gt; m4 --&gt; m5 --&gt; m6 --&gt; m7 --&gt; m8</code></pre>
+    m1 --&gt; m2 --&gt; m3 --&gt; m4 --&gt; m5 --&gt; m6 --&gt; m7 --&gt; m8 --&gt; m9</code></pre>
 <p>Alembic owns schema evolution. SQLAlchemy models describe the
 application view of the current schema; migrations describe how an
 existing database reaches it.</p>
@@ -700,19 +742,30 @@ existing database reaches it.</p>
 
     classDef active fill:#fff0bf,stroke:#9a6b00,color:#4d3500
     classDef next fill:#dcecff,stroke:#316aa3,color:#163957</code></pre>
-<p>Current verification checkpoint: 145 tests pass with 94% statement
-coverage across <code>src/</code>. Persistence, application, and API
+<p>Current checkpoint: 199 tests pass. Persistence, application, and API
 integration tests migrate a real <code>ledge_test</code> database down
 to base and back to head rather than substituting SQLite for PostgreSQL
 behavior.</p>
+<h2 id="recorded-sandbox-evidence">Recorded Sandbox evidence</h2>
+<pre class="mermaid"><code>flowchart LR
+    initial[Initial sync&lt;br/&gt;125 provider transactions&lt;br/&gt;1.175 seconds]
+    ledger[PostgreSQL&lt;br/&gt;125 sealed journals&lt;br/&gt;250 balanced postings]
+    refresh[Three refresh cycles&lt;br/&gt;39 additions / 15 removals&lt;br/&gt;0.511-0.788 seconds each]
+    replay[Unchanged poll&lt;br/&gt;0 ledger changes&lt;br/&gt;0.395 seconds]
+
+    initial --&gt; ledger --&gt; refresh --&gt; replay</code></pre>
+<p>These are observations from Plaid’s official dynamic Sandbox profile
+on a local development machine. They demonstrate real provider
+translation, cursor movement, balanced persistence, and idempotent
+polling; they are not production benchmarks.</p>
 <h2 id="what-exists-versus-what-comes-next">What exists versus what
 comes next</h2>
 <pre class="mermaid"><code>flowchart LR
-    current[Current checkpoint&lt;br/&gt;local API plus leased event pipeline]:::active
-    plaid[Next&lt;br/&gt;Plaid Sandbox adapter]:::next
-    aws[Later&lt;br/&gt;S3, SQS, Lambda, EC2, RDS]:::future
+    current[Current checkpoint&lt;br/&gt;real Plaid Sandbox to PostgreSQL ledger]:::active
+    aws[Next&lt;br/&gt;S3, SQS, Lambda, EC2, RDS]:::next
+    reads[Later&lt;br/&gt;consumer read models and dashboard]:::future
 
-    current --&gt; plaid --&gt; aws
+    current --&gt; aws --&gt; reads
 
     classDef active fill:#fff0bf,stroke:#9a6b00,color:#4d3500
     classDef next fill:#dcecff,stroke:#316aa3,color:#163957
@@ -724,16 +777,16 @@ cursor. If any lifecycle operation fails, both ledger changes and cursor
 advancement roll back. FastAPI now reads user-scoped resources and
 durably accepts duplicate-safe notifications. The leased processor
 retries those notifications without holding a database claim open across
-provider work and fences stale workers. Plaid Sandbox translation is the
-next major boundary; SQS and Lambda will later invoke the proven
-processor.</p>
+provider work and fences stale workers. A real Plaid Sandbox adapter and
+account bootstrap now drive the same synchronizer. SQS and Lambda are
+the next delivery boundary and will invoke the proven processor.</p>
 <h2 id="quick-directory-guide">Quick directory guide</h2>
 <pre class="text"><code>src/
-|-- application/     synchronization plus durable event processing
+|-- application/     account bootstrap, synchronization, and event processing
 |-- api/             FastAPI reads and normalized webhook intake
 |-- domain/          financial values, invariants, and lifecycle decisions
 |-- persistence/     SQLAlchemy mappings, sessions, and atomic repository writes
-`-- providers/       provider-independent contracts and the fake adapter
+`-- providers/       provider contracts plus deterministic and Plaid adapters
 
 migrations/
 `-- versions/        ordered PostgreSQL schema history

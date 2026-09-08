@@ -14,16 +14,16 @@ pending-to-posted activity into an auditable double-entry ledger. Later phases
 add recurring-charge detection, a 30-day projection, and a transparent
 safe-to-spend estimate.
 
-The first milestones established domain models, ledger operations, PostgreSQL
-persistence, migrations, fake-provider synchronization, and automated tests. A
-small FastAPI boundary exposes durable read models and accepts normalized provider
-notifications. A leased event processor now joins durable intake to
-synchronization. The real Plaid adapter is the next major application milestone
-before AWS delivery.
+The implemented local vertical slice includes domain models, ledger operations,
+PostgreSQL persistence, migrations, deterministic synchronization, FastAPI read
+models, durable notification intake, and a leased event processor. It now also
+creates a real Plaid Sandbox Item, imports supported accounts, persists provider
+mappings, and translates `/transactions/sync` responses through the same
+provider-neutral application service. AWS delivery is the next major milestone.
 
 ## Current checkpoint non-goals
 
-- Real bank credentials or production provider access
+- Production bank credentials, Plaid Link, or production provider access
 - Payments, transfers, or any money movement
 - Investments, multiple currencies, or machine-learning predictions
 - Cloud deployment or independently deployed services during Phase 1
@@ -76,24 +76,28 @@ FastAPI async read endpoints
         |
         v
 durable webhook inbox and leased event processor
+        |
+        v
+real Plaid Sandbox account bootstrap and transaction synchronization
 ```
 
 Starting with pure functions keeps accounting rules easy to understand and test.
 The implemented repository persists additions, modifications, removals, and
 pending-to-posted replacements without making the domain depend on SQLAlchemy.
 It keeps the current provider projection in `external_transactions` and appends
-balanced, sealed history to `journal_entries` and `postings`. Plaid, AWS, and
-React remain later phases.
+balanced, sealed history to `journal_entries` and `postings`. Plaid Sandbox now
+drives this path with actual provider responses; AWS and React remain later phases.
 
 ## Current provider boundary
 
 ```text
-normalized JSON fixture
-        |
-        v
-FakeTransactionProvider
-        |
-        v
+normalized JSON fixture                  Plaid Sandbox API
+        |                                       |
+        v                                       v
+FakeTransactionProvider              PlaidTransactionProvider
+        |                                       |
+        +-------------------+-------------------+
+                            v
 TransactionSyncPage
 ├── added Transaction values
 ├── modified Transaction values
@@ -103,13 +107,43 @@ TransactionSyncPage
 ```
 
 `TransactionProvider` is a protocol owned by Ledge. The fake implementation makes
-pagination and provider changes deterministic without adding network credentials.
-A future Plaid adapter will translate Plaid account and transaction fields into
-the same normalized types, leaving ledger and synchronization code provider-free.
+pagination and provider changes deterministic. The Plaid implementation calls
+`/transactions/sync`, filters explicitly unsupported accounts, translates USD
+amounts into integer cents, and returns the same normalized types. The ledger and
+synchronization code therefore remain provider-free.
+
+Plaid JSON decimals are parsed without first becoming binary floats, then rounded
+to cents with round-half-even at the provider boundary. A supported account that
+lacks a stored mapping, or a mapped account that disappears from the Item, fails
+closed instead of silently losing financial activity. Provider errors retain a
+safe machine error code when available but never include response bodies,
+credentials, or access tokens.
 
 The boundary intentionally models removals with only account and transaction
 identities. The repository uses those identities to load the last-known amount,
 description, and active journal required for the accounting reversal.
+
+## Plaid connection bootstrap
+
+```text
+Sandbox public token -> access-token exchange -> /accounts/get
+                     -> create/find Ledge user
+                     -> import supported financial accounts
+                     -> create provider_account_mappings
+                     -> create transaction_sync_states row
+                     -> save access token in owner-only local file
+```
+
+`PlaidSandboxConnector` owns the database portion of setup. Each
+`provider_account_mappings` row joins one Plaid account ID to one Ledge financial
+account and the Item's sync state, with composite foreign keys enforcing common
+user ownership. One provider account can map once per Item, and one Ledge account
+cannot be reused by another mapping.
+
+The access token is deliberately not stored in PostgreSQL. For local development,
+the bootstrap CLI writes it beneath `.ledge/` with mode `0600`; configuration
+loading rejects symlinks or broader permissions. A deployment can replace this
+file adapter with a managed secret store without changing domain values.
 
 ## Durable synchronization identity
 
@@ -170,9 +204,15 @@ writing the batch, no partial journal writes or new cursor should become visible
 Receiving a webhook twice must be harmless because at-least-once systems naturally
 produce duplicate deliveries. Pending replacement links and pending removals may
 arrive on separate pages, so the coordinator examines the complete fetched update
-before applying either event. The local fake-provider coordinator now enforces
-this database boundary; provider-specific pagination mutation errors will be
-handled when the Plaid adapter is introduced.
+before applying either event. Both deterministic and Plaid adapters use this
+database boundary. Plaid's mutation-during-pagination response becomes an
+explicit retryable provider failure so the entire fetched batch is discarded.
+
+Plaid can compact a pending transaction out of the returned change set while
+still returning its posted replacement. In that narrow case, the synchronizer
+imports the posted transaction as a standalone fact. Missing transactions during
+ordinary modification or removal still fail; the fallback does not hide general
+referential errors.
 
 ## Current event-processing boundary
 
@@ -253,8 +293,8 @@ dependency can replace it without changing route queries.
 
 The webhook route accepts only `transactions.updated`, preserves its submitted
 payload object, and returns without running synchronization. It is still a local,
-provider-neutral envelope: Plaid payload translation and signature verification
-remain future adapter responsibilities. All routes map SQLAlchemy failures to
+provider-neutral envelope: real Plaid webhook validation, translation, and worker
+dispatch remain future responsibilities. All routes map SQLAlchemy failures to
 `503` without exposing connection details. Unit tests replace the session
 factory, while integration tests migrate and query the real disposable
 `ledge_test` PostgreSQL database.

@@ -11,22 +11,28 @@ The local vertical slice currently includes:
 normalized webhook intake
   -> durable duplicate-safe PostgreSQL inbox
   -> leased event processor
-  -> deterministic provider adapter
+  -> deterministic or real Plaid Sandbox adapter
   -> cursor-based atomic synchronization
   -> immutable double-entry journals
   -> user-scoped FastAPI reads
 ```
 
-The verified checkpoint has 145 passing tests, 94% statement coverage across
-`src/`, and eight reversible Alembic migrations. Plaid Sandbox is the next major
-implementation milestone. SQS and Lambda follow after the provider adapter works
-locally.
+The current checkpoint has 199 passing tests and nine reversible Alembic
+migrations. A real Plaid Sandbox Item has been created and synchronized through
+the same application boundary used by deterministic tests. The next major
+milestone is AWS delivery through SQS and Lambda, followed by durable operational
+measurements.
+
+A recorded local dynamic-Sandbox run imported 125 transactions as 125 journals
+and 250 postings in 1.175 seconds. Later refreshes exercised cursor advancement
+and pending replacements in 0.511-0.788 seconds. These values are local Sandbox
+evidence, not production benchmarks.
 
 ## Reading order
 
 1. `domain-model.md` explains the financial vocabulary and why current provider
    state is separate from immutable journal history.
-2. `lifecycles.md` shows what happens when transactions are added, modified,
+2. `lifecycles.md` shows what happens when Plaid transactions are added, modified,
    removed, or replaced and when event workers fail or retry.
 3. `invariants.md` defines the rules every implementation must preserve.
 4. `architecture.md` connects the domain, PostgreSQL, FastAPI, provider boundary,

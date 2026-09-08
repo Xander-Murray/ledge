@@ -9,8 +9,10 @@ workers fail halfway through processing. Ledge is designed around those failure
 modes instead of assuming every event arrives once and in order.
 
 The project currently provides a tested local vertical slice using PostgreSQL,
-FastAPI, SQLAlchemy, Alembic, and a deterministic provider adapter. Plaid Sandbox
-integration is the next milestone, followed by an AWS queue and worker deployment.
+FastAPI, SQLAlchemy, Alembic, and both deterministic and real Plaid Sandbox
+adapters. It can create a Sandbox Item, map supported bank accounts, ingest real
+cursor updates, and preserve each change as balanced ledger history. AWS event
+delivery is the next infrastructure milestone.
 
 ## Product goal
 
@@ -28,12 +30,12 @@ flowchart LR
     webhook[Transaction notification] --> api[FastAPI intake]
     api --> inbox[(PostgreSQL event inbox)]
     inbox --> worker[Leased event processor]
-    worker --> provider[Transaction provider]
+    worker --> provider[Plaid transaction adapter]
     provider --> sync[Cursor-based synchronization]
     sync --> ledger[(PostgreSQL ledger)]
     ledger --> reads[User-scoped read API]
 
-    plaid[Plaid Sandbox - next] -. implements .-> provider
+    plaid[Plaid Sandbox] --> provider
     sqs[SQS and Lambda - planned] -. invokes .-> worker
 ```
 
@@ -59,6 +61,9 @@ flowchart LR
 - Added, modified, removed, and pending-to-posted transaction reconciliation
 - Duplicate-safe provider transaction and webhook handling
 - Multi-page cursor synchronization with atomic ledger and cursor commits
+- Real Plaid Sandbox Item bootstrap, account mapping, and `/transactions/sync`
+  translation
+- Continuous Sandbox exercises with optional Plaid-generated transaction refreshes
 - Cursor race detection and complete rollback after injected failures
 - Durable event attempts, five-minute processing leases, and abandoned-work
   recovery
@@ -111,16 +116,21 @@ scoped by that identity, but verified request authentication is not implemented.
 
 The current repository has:
 
-- 145 passing tests on Python 3.14
-- 94% statement coverage across `src/`
+- 199 passing tests on Python 3.14
 - Real PostgreSQL integration tests rather than SQLite substitutes
-- Eight reversible Alembic migrations with automated schema-drift detection
+- Nine reversible Alembic migrations with automated schema-drift detection
 - Concurrency coverage for active leases, expired claim recovery, cursor races,
   and stale-worker fencing
 - Failure-injection coverage proving transaction, journal, posting, and cursor
   changes roll back together
 
-These are current repository measurements, not simulated production-scale claims.
+One local run against Plaid's official dynamic Sandbox profile imported 125 real
+Sandbox transactions into 125 journals and 250 balanced postings in 1.175 seconds.
+Three later refresh cycles advanced the cursor while processing `+15/-3`,
+`+12/-6`, and `+12/-6` provider changes in 0.590, 0.788, and 0.511 seconds. A
+repeat poll against an unchanged Item made no ledger changes in 0.395 seconds.
+These are reproducible local Sandbox observations, not production benchmarks or
+throughput claims.
 
 ## Technology
 
@@ -172,12 +182,37 @@ Interactive OpenAPI documentation is available at
 `http://127.0.0.1:8000/docs`. A newly migrated development database contains no
 accounts or provider connections until test or sandbox data is added.
 
+### Exercise the real Plaid Sandbox pipeline
+
+Copy `.env.example` to the ignored `.env` file and add Sandbox credentials there.
+Never commit `.env` or a generated access-token file. Load the configuration,
+create a refreshable Sandbox Item, and perform an initial synchronization:
+
+```bash
+set -a
+source .env
+set +a
+venv/bin/ledge-plaid-sandbox --dynamic-transactions
+venv/bin/ledge-plaid-sync
+```
+
+Exercise cursor advancement and pending-to-posted changes over several real Plaid
+Sandbox refreshes:
+
+```bash
+venv/bin/ledge-plaid-sync --iterations 4 --interval 5 --refresh-between
+```
+
+The CLI prints each provider page count, added/modified/removed count, cursor
+outcome, and elapsed time. See [`docs/development.md`](docs/development.md) for
+isolated profiles, token-file handling, and troubleshooting.
+
 ## Current boundaries
 
 The following pieces are intentionally not implemented yet:
 
-- Plaid client, access-token handling, payload translation, and webhook
-  verification
+- Plaid Link, production institution credentials, webhook verification, and
+  automatic webhook-to-worker dispatch
 - Transaction versions and stale-update ordering
 - Automatic SQS handoff and Lambda invocation
 - S3 raw-event archive, dead-letter queue, controlled replay, and CloudWatch
@@ -187,12 +222,12 @@ The following pieces are intentionally not implemented yet:
 
 ## Roadmap
 
-1. **Plaid Sandbox:** Implement the provider adapter, pagination translation,
-   sandbox connection bootstrap, and real webhook normalization.
-2. **AWS event delivery:** Connect intake to SQS, run the proven processor from
+1. **AWS event delivery:** Connect intake to SQS, run the proven processor from
    Lambda, archive events in S3, and add a dead-letter queue.
-3. **Operational evidence:** Emit CloudWatch metrics and run documented failure
+2. **Operational evidence:** Emit CloudWatch metrics and run documented failure
    and load experiments for latency, retries, throughput, and recovery.
+3. **Plaid webhook completion:** Validate real Plaid notifications and enqueue the
+   existing durable processing workflow.
 4. **Consumer read models:** Add balances, recurring charges, cash-flow projection,
    and safe-to-spend calculations.
 5. **Thin dashboard:** Make the pipeline's results and health understandable on

@@ -31,6 +31,11 @@ of them must be rejected or rolled back.
     token; an expired worker cannot overwrite a newer worker's result.
 13. **Provider calls do not hold the inbox claim transaction open.** Claiming and
     finalization use short transactions around slower synchronization work.
+14. **Every included provider account is understood.** Supported Plaid accounts
+    require a durable mapping; unsupported types are explicitly ignored. Unknown
+    supported accounts and missing mapped accounts stop synchronization.
+15. **Secrets stay outside domain and ledger rows.** Plaid credentials come from
+    environment configuration, and local Item tokens must be owner-readable only.
 
 ## Sign conventions
 
@@ -79,10 +84,20 @@ credits the card liability while the expense is debited.
 - Each `(provider_name, provider_connection_id)` identifies at most one durable
   sync stream and belongs to one Ledge user. Its cursor may be null only to
   represent a stream that has not completed an initial synchronization.
-- A complete fake-provider update and its final cursor share one database
-  transaction. The coordinator detects cursor races, rejects pagination loops,
+- A complete provider update and its final cursor share one database transaction.
+  The coordinator detects cursor races, rejects pagination loops,
   rolls failed batches back completely, matches pending replacements across page
   boundaries, and can retry from the unchanged cursor.
+- Plaid responses are parsed with decimal semantics and normalized to integer
+  cents using round-half-even. Only USD activity may cross into the domain.
+- Provider-account mappings share a user with both their sync state and financial
+  account. Uniqueness constraints prevent one provider account from mapping twice
+  within an Item or one Ledge account from being reused by another mapping.
+- Plaid pagination mutation is an explicit provider failure. A posted transaction
+  whose pending source Plaid compacted away may be imported standalone; missing
+  modification and removal targets remain errors.
+- Local access-token files reject symlinks and group/other permissions. Provider
+  failures do not persist or print response bodies, credentials, or access tokens.
 - Each inbound notification is unique within its provider connection. PostgreSQL
   stores the submitted payload and lifecycle state, while intake distinguishes an
   identical redelivery from conflicting reuse of the same provider event ID.
