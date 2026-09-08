@@ -41,6 +41,8 @@ evidence, not production benchmarks.
    navigation.
 6. `database-diagram.html` provides a rendered visual map of the codebase,
    relational schema, test layers, and roadmap.
+7. `commands.md` is the practical command reference for local setup, Sandbox
+   synchronization, tests, the API, and PostgreSQL inspection.
 
 ## Source of truth
 
