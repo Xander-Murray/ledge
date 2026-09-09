@@ -13,6 +13,7 @@ from api.health import router as health_router
 from api.sync_status import router as sync_status_router
 from api.transactions import router as transactions_router
 from api.webhooks import router as webhooks_router
+from application.event_queue import EventPublisher
 from persistence.database import (
     AsyncSessionFactory,
     create_async_database_engine,
@@ -25,6 +26,7 @@ def create_app(
     *,
     session_factory: AsyncSessionFactory | None = None,
     user_id: UUID | None = None,
+    event_publisher: EventPublisher | None = None,
 ) -> FastAPI:
     """Build Ledge's HTTP application with explicit infrastructure wiring."""
     owned_engine: AsyncEngine | None = None
@@ -49,6 +51,7 @@ def create_app(
     )
     app.state.session_factory = session_factory
     app.state.user_id = user_id
+    app.state.event_publisher = event_publisher
     app.include_router(health_router)
     app.include_router(accounts_router)
     app.include_router(transactions_router)

@@ -15,6 +15,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from api.app import create_app
+from application.event_queue import EventPublisher
 from persistence.database import (
     create_async_database_engine,
     create_async_session_factory,
@@ -188,11 +189,16 @@ def api_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
 def api_client_factory(
     api_database: str,
 ) -> Callable[[UUID], AsyncIterator[AsyncClient]]:
-    async def create_client(user_id: UUID = USER_ID) -> AsyncIterator[AsyncClient]:
+    async def create_client(
+        user_id: UUID = USER_ID,
+        *,
+        event_publisher: EventPublisher | None = None,
+    ) -> AsyncIterator[AsyncClient]:
         engine = create_async_database_engine(api_database)
         app = create_app(
             session_factory=create_async_session_factory(engine),
             user_id=user_id,
+            event_publisher=event_publisher,
         )
         try:
             async with AsyncClient(

@@ -9,7 +9,8 @@ from pydantic import BaseModel, ConfigDict, StringConstraints
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.dependencies import get_current_user_id, get_session
+from api.dependencies import get_current_user_id, get_event_publisher, get_session
+from application.event_queue import EventPublisher, EventPublishError
 from persistence.inbound_events import (
     InboundEventConflictError,
     ProviderConnectionNotFoundError,
@@ -53,6 +54,7 @@ async def accept_transaction_webhook(
     request: TransactionWebhookRequest,
     session: Annotated[AsyncSession, Depends(get_session)],
     user_id: Annotated[UUID, Depends(get_current_user_id)],
+    event_publisher: Annotated[EventPublisher | None, Depends(get_event_publisher)],
 ) -> AcceptedWebhookResponse:
     """Durably accept a provider event without synchronizing in the request."""
     try:
@@ -81,6 +83,15 @@ async def accept_transaction_webhook(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="database unavailable",
         ) from error
+
+    if event_publisher is not None and event.status in {"pending", "failed"}:
+        try:
+            await event_publisher.publish(event.id)
+        except EventPublishError as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="event queue unavailable",
+            ) from error
 
     return AcceptedWebhookResponse(
         id=event.id,

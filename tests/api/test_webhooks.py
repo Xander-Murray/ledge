@@ -15,11 +15,47 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from api.app import create_app
+from application.event_queue import EventPublishError
 from persistence.database import AsyncSessionFactory
 from persistence.models import InboundEventModel
 
 USER_ID = UUID("11111111-1111-1111-1111-111111111111")
 FAKE_SYNC_STATE_ID = UUID("20000000-0000-0000-0000-000000000001")
+
+
+class RecordingEventPublisher:
+    def __init__(self) -> None:
+        self.event_ids: list[UUID] = []
+
+    async def publish(self, event_id: UUID) -> None:
+        self.event_ids.append(event_id)
+
+
+class InspectingEventPublisher(RecordingEventPublisher):
+    def __init__(self, database_url: str) -> None:
+        super().__init__()
+        self.database_url = database_url
+
+    async def publish(self, event_id: UUID) -> None:
+        engine = create_engine(self.database_url)
+        try:
+            with Session(engine) as session:
+                assert session.get(InboundEventModel, event_id) is not None
+        finally:
+            engine.dispose()
+        await super().publish(event_id)
+
+
+class RejectingEventPublisher:
+    async def publish(self, event_id: UUID) -> None:
+        raise EventPublishError(f"injected queue failure for {event_id}")
+
+
+class FlakyEventPublisher(RecordingEventPublisher):
+    async def publish(self, event_id: UUID) -> None:
+        await super().publish(event_id)
+        if len(self.event_ids) == 1:
+            raise EventPublishError("injected first-attempt failure")
 
 
 def webhook_payload(
@@ -74,6 +110,75 @@ async def test_webhook_durably_preserves_the_raw_payload(
 
 @pytest.mark.integration
 @pytest.mark.anyio
+async def test_webhook_publishes_only_after_the_event_is_committed(
+    api_database: str,
+    api_client_factory: Callable[[UUID], AsyncIterator[AsyncClient]],
+) -> None:
+    publisher = InspectingEventPublisher(api_database)
+
+    async for client in api_client_factory(USER_ID, event_publisher=publisher):
+        response = await client.post("/webhooks/transactions", json=webhook_payload())
+
+    assert response.status_code == 202
+    assert publisher.event_ids == [UUID(response.json()["id"])]
+
+
+@pytest.mark.integration
+@pytest.mark.anyio
+async def test_queue_failure_returns_unavailable_but_preserves_the_event(
+    api_database: str,
+    api_client_factory: Callable[[UUID], AsyncIterator[AsyncClient]],
+) -> None:
+    async for client in api_client_factory(
+        USER_ID,
+        event_publisher=RejectingEventPublisher(),
+    ):
+        response = await client.post("/webhooks/transactions", json=webhook_payload())
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "event queue unavailable"}
+
+    engine = create_engine(api_database)
+    try:
+        with Session(engine) as session:
+            event = session.scalar(select(InboundEventModel))
+            assert event is not None
+            assert event.status == "pending"
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.anyio
+async def test_provider_retry_republishes_the_same_durable_event(
+    api_database: str,
+    api_client_factory: Callable[[UUID], AsyncIterator[AsyncClient]],
+) -> None:
+    publisher = FlakyEventPublisher()
+    async for client in api_client_factory(USER_ID, event_publisher=publisher):
+        failed_response = await client.post(
+            "/webhooks/transactions",
+            json=webhook_payload(),
+        )
+        retry_response = await client.post(
+            "/webhooks/transactions",
+            json=webhook_payload(),
+        )
+
+    assert failed_response.status_code == 503
+    assert retry_response.status_code == 202
+    assert publisher.event_ids == [UUID(retry_response.json()["id"])] * 2
+
+    engine = create_engine(api_database)
+    try:
+        with Session(engine) as session:
+            assert session.scalar(select(func.count(InboundEventModel.id))) == 1
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.anyio
 async def test_identical_webhook_redelivery_returns_the_existing_event(
     api_database: str,
     api_client_factory: Callable[[UUID], AsyncIterator[AsyncClient]],
@@ -108,7 +213,8 @@ async def test_redelivery_reports_the_existing_events_current_status(
     api_client_factory: Callable[[UUID], AsyncIterator[AsyncClient]],
 ) -> None:
     request_body = webhook_payload()
-    async for client in api_client_factory(USER_ID):
+    publisher = RecordingEventPublisher()
+    async for client in api_client_factory(USER_ID, event_publisher=publisher):
         first_response = await client.post(
             "/webhooks/transactions",
             json=request_body,
@@ -136,6 +242,7 @@ async def test_redelivery_reports_the_existing_events_current_status(
     assert duplicate_response.status_code == 202
     assert duplicate_response.json()["id"] == first_response.json()["id"]
     assert duplicate_response.json()["status"] == "processed"
+    assert publisher.event_ids == [UUID(first_response.json()["id"])]
 
 
 @pytest.mark.integration
