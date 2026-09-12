@@ -2,7 +2,11 @@ from uuid import UUID
 
 import pytest
 
-from api.config import ApiConfigurationError, get_configured_user_id
+from api.config import (
+    ApiConfigurationError,
+    get_configured_user_id,
+    get_event_queue_url,
+)
 
 
 def test_configured_user_id_parses_uuid() -> None:
@@ -21,3 +25,18 @@ def test_configured_user_id_rejects_missing_or_invalid_value(
 
     with pytest.raises(ApiConfigurationError):
         get_configured_user_id(environ)
+
+
+def test_event_queue_url_is_optional_and_trimmed() -> None:
+    assert get_event_queue_url({}) is None
+    assert get_event_queue_url({"LEDGE_EVENT_QUEUE_URL": "   "}) is None
+    assert (
+        get_event_queue_url(
+            {
+                "LEDGE_EVENT_QUEUE_URL": (
+                    "  https://sqs.us-east-1.amazonaws.com/123/ledge-events  "
+                )
+            }
+        )
+        == "https://sqs.us-east-1.amazonaws.com/123/ledge-events"
+    )

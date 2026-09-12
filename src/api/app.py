@@ -8,12 +8,13 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from api.accounts import router as accounts_router
-from api.config import get_configured_user_id
+from api.config import get_configured_user_id, get_event_queue_url
 from api.health import router as health_router
 from api.sync_status import router as sync_status_router
 from api.transactions import router as transactions_router
 from api.webhooks import router as webhooks_router
 from application.event_queue import EventPublisher
+from infrastructure.sqs import create_sqs_event_publisher
 from persistence.database import (
     AsyncSessionFactory,
     create_async_database_engine,
@@ -35,6 +36,10 @@ def create_app(
         session_factory = create_async_session_factory(owned_engine)
     if user_id is None:
         user_id = get_configured_user_id()
+    if event_publisher is None:
+        queue_url = get_event_queue_url()
+        if queue_url is not None:
+            event_publisher = create_sqs_event_publisher(queue_url=queue_url)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:

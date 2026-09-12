@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from uuid import UUID
 
 USER_ID_ENV_VAR = "LEDGE_USER_ID"
+EVENT_QUEUE_URL_ENV_VAR = "LEDGE_EVENT_QUEUE_URL"
 
 
 class ApiConfigurationError(RuntimeError):
@@ -25,3 +26,12 @@ def get_configured_user_id(environ: Mapping[str, str] | None = None) -> UUID:
         raise ApiConfigurationError(
             f"{USER_ID_ENV_VAR} must be a valid UUID"
         ) from error
+
+
+def get_event_queue_url(environ: Mapping[str, str] | None = None) -> str | None:
+    """Return the optional SQS queue URL used for asynchronous event handoff."""
+    source = os.environ if environ is None else environ
+    raw_queue_url = source.get(EVENT_QUEUE_URL_ENV_VAR)
+    if raw_queue_url is None or not raw_queue_url.strip():
+        return None
+    return raw_queue_url.strip()
