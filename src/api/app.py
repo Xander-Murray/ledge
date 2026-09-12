@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from api.accounts import router as accounts_router
 from api.config import get_configured_user_id, get_event_queue_url
+from api.dashboard import router as dashboard_router
 from api.health import router as health_router
 from api.sync_status import router as sync_status_router
 from api.transactions import router as transactions_router
@@ -58,6 +59,7 @@ def create_app(
     app.state.user_id = user_id
     app.state.event_publisher = event_publisher
     app.include_router(health_router)
+    app.include_router(dashboard_router)
     app.include_router(accounts_router)
     app.include_router(transactions_router)
     app.include_router(sync_status_router)
