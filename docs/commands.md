@@ -154,7 +154,11 @@ Important tables:
 - `inbox_events`: durable webhook events and processing status.
 # Demonstration commands
 
+Start `venv/bin/uvicorn api.app:create_app --factory` and open
+`http://127.0.0.1:8000/` for activity, purchase history and processing outcomes.
+For the local acceptance experiment, disable queue publishing as documented in
+the demonstration guide. Refresh the page after running the experiment.
+
 See [demonstration.md](demonstration.md) for the current evidence workflow,
 including `ledge-plaid-sync --details` and the destructive-to-test-schema
 PostgreSQL reliability scenario. Lambda deployment is paused.
-

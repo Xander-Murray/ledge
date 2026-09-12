@@ -5,6 +5,12 @@ detailed engineering model used to develop, review, and explain Ledge.
 
 ## Current priority
 
+The activity dashboard is implemented at `/`; purchase history lives at
+`/activity/{transaction_id}`. It reads the same user-scoped PostgreSQL records as
+the API, with no separate frontend service. The next infrastructure checkpoint
+is Lambda deployment and an acceptance run through SQS. Authentication,
+balances and projections remain unfinished.
+
 Read [demonstration.md](demonstration.md) for the active completion plan and
 repeatable evidence commands. Lambda deployment is paused. SQS publishing and a
 prepared Lambda runtime exist; the earlier AWS-first sequencing below is historical.

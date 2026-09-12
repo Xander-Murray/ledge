@@ -234,18 +234,32 @@ The next product milestone is a thin activity and audit dashboard. Dates and a
 balance baseline are prerequisites for the promised financial projections.
 S3 archival and complex AWS networking are outside the completion scope.
 
-## Earlier roadmap (superseded by the completion plan)
+## Next milestones
 
-1. **AWS event delivery:** Connect intake to SQS, run the proven processor from
-   Lambda, archive events in S3, and add a dead-letter queue.
-2. **Operational evidence:** Emit CloudWatch metrics and run documented failure
-   and load experiments for latency, retries, throughput, and recovery.
+1. **AWS event delivery:** Deploy the prepared Lambda worker and verify SQS
+   redelivery against a reachable PostgreSQL database.
+2. **Operational evidence:** Run documented failure and load experiments for
+   latency, retries, throughput, and recovery.
 3. **Plaid webhook completion:** Validate real Plaid notifications and enqueue the
    existing durable processing workflow.
 4. **Consumer read models:** Add balances, recurring charges, cash-flow projection,
    and safe-to-spend calculations.
-5. **Thin dashboard:** Make the pipeline's results and health understandable on
-   desktop and mobile.
+5. **Dashboard expansion:** Extend the implemented activity/history dashboard
+   with financial read models once their input data is available.
+
+## Dashboard
+
+Start the API and open `http://127.0.0.1:8000/`. The dashboard shows paginated
+current activity, optional removed/replaced activity, pending/posted status,
+per-purchase journal history (including pending predecessors), synchronization
+state and the ten latest notification outcomes with attempt counts.
+Click a purchase to inspect entries, reversals and postings. Refresh to read new
+committed state. Amounts are USD transaction activity, not account balances;
+timestamps describe local recorded updates, not purchase dates.
+
+The dashboard uses the configured user's identity, just like the API. It has no
+login and is intended for local/private Sandbox use until authentication exists.
+The local acceptance workflow is documented in [the demonstration guide](docs/demonstration.md).
 
 ## Documentation
 

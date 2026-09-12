@@ -81,14 +81,16 @@ explicitly selected the existing dynamic token matching the configured user.
 
 1. Demonstrate the same specific pending-to-posted identity in live Sandbox output
    and inspect its committed history. Record actual results, not invented counts.
-2. Add a thin dashboard for current activity, correction history and sync health.
+2. Implemented: a thin dashboard at `/` for current activity, correction history
+   and sync health. Removed/replaced rows are available through the history filter.
 3. Connect a verified Plaid notification to the worker and test that whole route.
 4. Collect repeatable latency distributions, workload sizes, duplicate outcomes
    and recovery results, with environment and input provenance attached.
 5. Add transaction dates and a balance baseline before implementing recurring
    charges, 30-day projections and safe-to-spend. Transaction sums alone are not
    bank balances. These README product goals remain unfinished.
-6. Revisit minimal deployment after the local demonstration is understandable.
+6. Next: finish minimal Lambda deployment and repeat acceptance through SQS,
+   including real redelivery. The local command does not verify cloud behavior.
 
 S3 archival, Terraform, custom observability dashboards and complex AWS networking
 are outside this completion plan. SQS is implemented; Lambda code is prepared but
