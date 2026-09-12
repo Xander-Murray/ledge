@@ -45,6 +45,40 @@ complete deployed webhook route. Existing HTTP tests cover intake separately.
 
 ## Remaining completion criteria
 
+### Connected local Sandbox acceptance
+
+Load `.env` in both terminals. Start the API with queue publishing disabled for
+this local worker experiment, so no competing cloud consumer processes the event:
+
+```bash
+LEDGE_EVENT_QUEUE_URL='' venv/bin/uvicorn api.app:create_app --factory
+```
+
+In the second terminal, using the same database/user/Item configuration:
+
+```bash
+LEDGE_PLAID_TOKEN_FILE=.ledge/plaid-dynamic.json \
+venv/bin/python -m commands.plaid_acceptance --interval 10
+```
+
+This writes real Sandbox changes into the working database and requests one
+Plaid refresh. Run without other workers/sync commands. It sends each manually
+constructed normalized notification twice through HTTP, requires the same inbox
+identity, processes and reprocesses that event, and compares committed state.
+It fails if no pending-to-posted replacement is observed after refreshing. It
+does not pretend to receive a signed Plaid webhook or verify AWS transport.
+Use `--api-url` only for a trusted API connected to the same database and user.
+The failure-injection scenario above remains a separate controlled experiment.
+
+Verified local run on 2026-09-12: two distinct notifications each submitted twice
+returned the same respective inbox identity. Reprocessing each event left the
+financial snapshot unchanged. A real Sandbox refresh produced six observed
+pending-to-posted replacements. Journals grew from 389 to 407 and postings from
+778 to 814 for that refresh; worker duration was 583.434 ms. The initial catch-up
+worker took 834.360 ms. These are two local observations, not latency percentiles
+or AWS measurements. The default token belonged to a different user; this run
+explicitly selected the existing dynamic token matching the configured user.
+
 1. Demonstrate the same specific pending-to-posted identity in live Sandbox output
    and inspect its committed history. Record actual results, not invented counts.
 2. Add a thin dashboard for current activity, correction history and sync health.
