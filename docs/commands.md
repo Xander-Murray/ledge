@@ -152,4 +152,9 @@ Important tables:
 - `transaction_sync_states`: one committed cursor per provider connection.
 - `provider_account_mappings`: Plaid account IDs mapped to Ledge accounts.
 - `inbox_events`: durable webhook events and processing status.
+# Demonstration commands
+
+See [demonstration.md](demonstration.md) for the current evidence workflow,
+including `ledge-plaid-sync --details` and the destructive-to-test-schema
+PostgreSQL reliability scenario. Lambda deployment is paused.
 

@@ -220,7 +220,21 @@ The following pieces are intentionally not implemented yet:
 - Authentication and multi-user request identity
 - Calculated balance, recurring-charge, projection, and dashboard views
 
-## Roadmap
+## Current completion plan
+
+Lambda deployment is paused while we make financial correctness visible and
+reproducible. See [the demonstration guide](docs/demonstration.md) for commands,
+asserted scenarios, evidence limits, and the revised completion criteria.
+
+Use `ledge-plaid-sync --iterations 3 --interval 10 --refresh-between --details`
+to inspect committed identities and history counts behind the provider summary.
+The CLI exercises synchronization directly, not the webhook/SQS/Lambda route.
+
+The next product milestone is a thin activity and audit dashboard. Dates and a
+balance baseline are prerequisites for the promised financial projections.
+S3 archival and complex AWS networking are outside the completion scope.
+
+## Earlier roadmap (superseded by the completion plan)
 
 1. **AWS event delivery:** Connect intake to SQS, run the proven processor from
    Lambda, archive events in S3, and add a dead-letter queue.

@@ -3,11 +3,13 @@ from uuid import UUID
 
 import pytest
 
+from application.plaid_connection import (
+    PlaidAccountCatalogError,
+    ignored_plaid_account_ids,
+)
 from application.synchronization import SyncResult, TransactionSynchronizer
 from commands.plaid_sync import (
-    PlaidAccountCatalogError,
     _cursor_status,
-    _ignored_account_ids,
     _parse_arguments,
     _run_cycle,
 )
@@ -51,7 +53,7 @@ def account(provider_id: str, account_type: str, subtype: str) -> PlaidAccount:
 
 
 def test_catalog_explicitly_ignores_only_unsupported_accounts() -> None:
-    ignored = _ignored_account_ids(
+    ignored = ignored_plaid_account_ids(
         (
             account("checking", "depository", "checking"),
             account("loan", "loan", "student"),
@@ -65,7 +67,7 @@ def test_catalog_explicitly_ignores_only_unsupported_accounts() -> None:
 
 def test_catalog_rejects_new_supported_account_without_mapping() -> None:
     with pytest.raises(PlaidAccountCatalogError, match="has not been mapped"):
-        _ignored_account_ids(
+        ignored_plaid_account_ids(
             (
                 account("checking", "depository", "checking"),
                 account("new-card", "credit", "credit card"),
@@ -76,7 +78,7 @@ def test_catalog_rejects_new_supported_account_without_mapping() -> None:
 
 def test_catalog_rejects_stale_mapping() -> None:
     with pytest.raises(PlaidAccountCatalogError, match="missing"):
-        _ignored_account_ids((), {"checking": MAPPED_ID})
+        ignored_plaid_account_ids((), {"checking": MAPPED_ID})
 
 
 def test_continuous_run_arguments_are_bounded() -> None:

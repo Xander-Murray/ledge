@@ -11,8 +11,13 @@ from uuid import UUID
 import httpx2
 
 from api.config import get_configured_user_id
-from application.plaid_connection import ledge_account_type, load_plaid_account_ids
+from application.plaid_connection import (
+    PlaidAccountCatalogError,
+    ignored_plaid_account_ids,
+    load_plaid_account_ids,
+)
 from application.synchronization import TransactionSynchronizer
+from commands.evidence import ledger_snapshot, print_changes
 from persistence.database import (
     create_database_engine,
     create_session_factory,
@@ -24,11 +29,7 @@ from providers.plaid_config import (
     get_plaid_credentials,
     load_plaid_connection_secret,
 )
-from providers.plaid_sandbox import PlaidAccount, PlaidSandboxClient
-
-
-class PlaidAccountCatalogError(RuntimeError):
-    """Plaid's accounts no longer agree with Ledge's stored mappings."""
+from providers.plaid_sandbox import PlaidSandboxClient
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -63,7 +64,7 @@ def main(argv: list[str] | None = None) -> None:
                 secret=credentials.secret,
             )
             accounts = plaid.get_accounts(access_token=connection.access_token)
-            ignored_account_ids = _ignored_account_ids(accounts, account_ids)
+            ignored_account_ids = ignored_plaid_account_ids(accounts, account_ids)
             print(
                 f"      {len(account_ids)} supported, "
                 f"{len(ignored_account_ids)} intentionally ignored",
@@ -93,6 +94,11 @@ def main(argv: list[str] | None = None) -> None:
                         flush=True,
                     )
                     sleep(arguments.interval)
+                if arguments.details:
+                    with session_factory() as session:
+                        before = ledger_snapshot(
+                            session, user_id, set(account_ids.values())
+                        )
                 _run_cycle(
                     cycle=cycle,
                     cycle_count=arguments.iterations,
@@ -100,6 +106,12 @@ def main(argv: list[str] | None = None) -> None:
                     item_id=connection.item_id,
                     synchronizer=synchronizer,
                 )
+                if arguments.details:
+                    with session_factory() as session:
+                        after = ledger_snapshot(
+                            session, user_id, set(account_ids.values())
+                        )
+                    print_changes(before, after)
                 if cycle < arguments.iterations and not arguments.refresh_between:
                     print(
                         f"      waiting {arguments.interval:g}s for the next cycle...",
@@ -158,6 +170,11 @@ def _parse_arguments(argv: list[str] | None) -> argparse.Namespace:
         help="seconds between cycles (default: 2)",
     )
     parser.add_argument(
+        "--details",
+        action="store_true",
+        help="show committed transaction identities, replacements and journal counts",
+    )
+    parser.add_argument(
         "--refresh-between",
         action="store_true",
         help="ask Plaid to generate dynamic updates before later cycles",
@@ -189,33 +206,6 @@ def _cursor_status(starting_cursor: str | None, ending_cursor: str) -> str:
     if starting_cursor == ending_cursor:
         return "unchanged (already current)"
     return "advanced and saved"
-
-
-def _ignored_account_ids(
-    accounts: tuple[PlaidAccount, ...],
-    mapped_account_ids: dict[str, UUID],
-) -> frozenset[str]:
-    current_ids = {account.provider_account_id for account in accounts}
-    missing_ids = set(mapped_account_ids).difference(current_ids)
-    if missing_ids:
-        raise PlaidAccountCatalogError(
-            "A mapped Plaid account is missing from the current Item"
-        )
-    unmapped_supported_ids = {
-        account.provider_account_id
-        for account in accounts
-        if ledge_account_type(account) is not None
-        and account.provider_account_id not in mapped_account_ids
-    }
-    if unmapped_supported_ids:
-        raise PlaidAccountCatalogError(
-            "Plaid returned a supported account that has not been mapped"
-        )
-    return frozenset(
-        account.provider_account_id
-        for account in accounts
-        if ledge_account_type(account) is None
-    )
 
 
 if __name__ == "__main__":

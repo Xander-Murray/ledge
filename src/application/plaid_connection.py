@@ -25,6 +25,10 @@ class NoSupportedPlaidAccountsError(RuntimeError):
     """The Plaid Item has no account types supported by this Ledge MVP."""
 
 
+class PlaidAccountCatalogError(RuntimeError):
+    """The current Plaid accounts disagree with Ledge's durable mappings."""
+
+
 @dataclass(frozen=True, slots=True)
 class PlaidConnectionResult:
     item_id: str
@@ -153,3 +157,31 @@ def ledge_account_type(account: PlaidAccount) -> str | None:
     if account.account_type == "credit":
         return "credit"
     return None
+
+
+def ignored_plaid_account_ids(
+    accounts: tuple[PlaidAccount, ...],
+    mapped_account_ids: dict[str, UUID],
+) -> frozenset[str]:
+    """Validate mapped accounts and return unsupported provider account IDs."""
+    current_ids = {account.provider_account_id for account in accounts}
+    missing_ids = set(mapped_account_ids).difference(current_ids)
+    if missing_ids:
+        raise PlaidAccountCatalogError(
+            "A mapped Plaid account is missing from the current Item"
+        )
+    unmapped_supported_ids = {
+        account.provider_account_id
+        for account in accounts
+        if ledge_account_type(account) is not None
+        and account.provider_account_id not in mapped_account_ids
+    }
+    if unmapped_supported_ids:
+        raise PlaidAccountCatalogError(
+            "Plaid returned a supported account that has not been mapped"
+        )
+    return frozenset(
+        account.provider_account_id
+        for account in accounts
+        if ledge_account_type(account) is None
+    )

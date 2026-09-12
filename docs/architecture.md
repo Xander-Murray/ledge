@@ -30,7 +30,14 @@ provider-neutral application service. AWS delivery is the next major milestone.
 - A native mobile application
 - Complex budgeting and social features
 
-## Target architecture
+## Current direction
+
+The active [completion plan](demonstration.md) prioritizes observable local
+correctness and a thin dashboard. Lambda deployment is paused; database hosting
+is undecided. S3 archival and complex AWS networking are outside the scope.
+The diagram below records the earlier design, not required completion work.
+
+## Earlier target architecture
 
 ```text
 Plaid Sandbox webhook

@@ -14,6 +14,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, create_engine, func, select
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from application.event_processing import (
@@ -24,8 +25,9 @@ from application.event_processing import (
     ProviderNotConfiguredError,
     UnsupportedInboundEventTypeError,
 )
+from commands.evidence import ledger_snapshot, print_changes
 from domain.ledger import TransactionNotFoundError
-from domain.models import Transaction
+from domain.models import Transaction, TransactionRemoval
 from persistence.database import create_session_factory
 from persistence.models import (
     ExternalTransactionModel,
@@ -34,6 +36,7 @@ from persistence.models import (
     TransactionSyncStateModel,
     UserModel,
 )
+from persistence.repository import LedgerRepository
 from providers.base import TransactionProvider, TransactionSyncPage
 from providers.fake import FakeTransactionProvider, UnknownProviderCursorError
 
@@ -104,6 +107,145 @@ class AdvancingProvider:
         page = self._provider.fetch_transaction_updates(cursor)
         self._clock.advance(self._elapsed)
         return page
+
+
+@pytest.mark.integration
+def test_visible_reconciliation_evidence(
+    event_processing_database, monkeypatch
+) -> None:
+    """Controlled inputs through the real worker and PostgreSQL, without AWS."""
+    db = event_processing_database
+
+    def snapshot():
+        with db.session_factory() as session:
+            return ledger_snapshot(session, db.user_id, {ACCOUNT_ID})
+
+    def cursor():
+        with db.session_factory() as session:
+            return session.get(TransactionSyncStateModel, db.sync_state_id).cursor
+
+    def event_id():
+        identity = uuid4()
+        with db.session_factory() as session, session.begin():
+            session.add(
+                InboundEventModel(
+                    id=identity,
+                    transaction_sync_state_id=db.sync_state_id,
+                    provider_event_id=str(identity),
+                    event_type="transactions.updated",
+                    raw_payload={"source": "controlled-evidence"},
+                    status="pending",
+                )
+            )
+        return identity
+
+    def run(identity, page):
+        return _processor(db, FakeTransactionProvider({cursor(): page})).process(
+            identity
+        )
+
+    def page(next_cursor, *, added=(), modified=(), removed=()):
+        return TransactionSyncPage(
+            added=added,
+            modified=modified,
+            removed=removed,
+            next_cursor=next_cursor,
+            has_more=False,
+        )
+
+    pending = Transaction(ACCOUNT_ID, "restaurant-pending", 4000, "Restaurant", True)
+    posted = Transaction(
+        ACCOUNT_ID, "restaurant-posted", 4800, "Restaurant", False, "restaurant-pending"
+    )
+    print(
+        "\nCONTROLLED evidence: real PostgreSQL and event processor; no live Plaid/AWS"
+    )
+    before = snapshot()
+    run(db.event_id, page("pending", added=(pending,)))
+    first = snapshot()
+    assert first["transactions"]["restaurant-pending"]["amount_cents"] == 4000
+    assert len(first["journals"]) == 1
+    print_changes(before, first)
+
+    posted_event = event_id()
+    posted_page = page(
+        "posted",
+        added=(posted,),
+        removed=(TransactionRemoval(ACCOUNT_ID, "restaurant-pending"),),
+    )
+    run(posted_event, posted_page)
+    second = snapshot()
+    assert second["transactions"]["restaurant-pending"]["status"] == "replaced"
+    assert second["transactions"]["restaurant-posted"]["amount_cents"] == 4800
+    assert (
+        second["transactions"]["restaurant-posted"]["replaces"] == "restaurant-pending"
+    )
+    assert len(second["journals"]) == 3
+    assert all(
+        second["journals"][key] == value for key, value in first["journals"].items()
+    )
+    print_changes(first, second)
+
+    duplicate = run(posted_event, posted_page)
+    assert duplicate.already_processed and duplicate.attempt_count == 1
+    assert snapshot() == second and cursor() == "posted"
+    print("PASS: duplicate event leaves journals, postings and cursor unchanged")
+
+    corrected = Transaction(
+        ACCOUNT_ID, "restaurant-posted", 4500, "Restaurant", False, "restaurant-pending"
+    )
+    correction = page("corrected", modified=(corrected,))
+    correction_event = event_id()
+    original = LedgerRepository.modify_transaction
+
+    def fail_after_write(self, **kwargs):
+        original(self, **kwargs)
+        raise SQLAlchemyError("controlled failure after ledger writes")
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(LedgerRepository, "modify_transaction", fail_after_write)
+        with pytest.raises(SQLAlchemyError, match="controlled failure"):
+            run(correction_event, correction)
+    assert snapshot() == second and cursor() == "posted"
+    with db.session_factory() as session:
+        assert session.get(InboundEventModel, correction_event).status == "failed"
+    print("PASS: injected failure after writes rolls back financial state AND cursor")
+    retry = run(correction_event, correction)
+    third = snapshot()
+    assert retry.attempt_count == 2 and retry.status == "processed"
+    assert third["transactions"]["restaurant-posted"]["amount_cents"] == 4500
+    assert len(third["journals"]) == 5 and cursor() == "corrected"
+    print_changes(second, third)
+    print(
+        "PASS: retry recovered; measured worker duration "
+        f"{retry.processing_duration_ms:.3f} ms"
+    )
+
+    run(
+        event_id(),
+        page("removed", removed=(TransactionRemoval(ACCOUNT_ID, "restaurant-posted"),)),
+    )
+    final = snapshot()
+    assert final["transactions"]["restaurant-posted"]["status"] == "removed"
+    assert len(final["journals"]) == 6
+    assert len(final["postings"]) == 12
+    assert all(row["sealed"] for row in final["journals"].values())
+    for journal_id in final["journals"]:
+        assert (
+            sum(
+                amount
+                for identity, _, amount in final["postings"]
+                if identity == journal_id
+            )
+            == 0
+        )
+    run(event_id(), page("removed"))
+    assert snapshot() == final and cursor() == "removed"
+    print_changes(third, final)
+    print(
+        "PASS: removal appends reversal; all 6 journals balanced/sealed; "
+        "unchanged poll makes no writes"
+    )
 
 
 def _get_test_database_url() -> str:

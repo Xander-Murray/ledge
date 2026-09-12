@@ -3,7 +3,15 @@
 The root `README.md` is the public product overview. This directory contains the
 detailed engineering model used to develop, review, and explain Ledge.
 
-## Current checkpoint
+## Current priority
+
+Read [demonstration.md](demonstration.md) for the active completion plan and
+repeatable evidence commands. Lambda deployment is paused. SQS publishing and a
+prepared Lambda runtime exist; the earlier AWS-first sequencing below is historical.
+The focus is visible transaction lifecycles, rollback/retry evidence and a thin
+dashboard. Older test counts are recorded checkpoints, not current totals.
+
+## Earlier checkpoint
 
 The local vertical slice currently includes:
 
