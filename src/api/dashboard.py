@@ -132,7 +132,8 @@ async def dashboard(
         navigation += f'<a href="/?offset={offset + 25}">Next</a>'
     if include_history:
         navigation = navigation.replace("?offset=", "?include_history=true&amp;offset=")
-    return page(f"""<h2>Current activity</h2>
+    heading = "Recorded activity" if include_history else "Current activity"
+    return page(f"""<h2>{heading}</h2>
 <p><a href="/?include_history=true">Include replaced and removed activity</a>
  / <a href="/">Current only</a></p>
 <p>Positive amounts are outflows; negative amounts are inflows. USD only.

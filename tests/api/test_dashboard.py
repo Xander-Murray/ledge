@@ -22,7 +22,46 @@ async def test_dashboard_is_scoped_and_history_is_private(api_client_factory):
         assert invalid.status_code == 422
 
 
-def test_exact_money_and_html_escaping():
+@pytest.mark.integration
+@pytest.mark.anyio
+async def test_history_filter_and_provider_text_are_safe(
+    api_database, api_client_factory
+):
+    from sqlalchemy import create_engine, update
+    from sqlalchemy.orm import Session
+
+    from persistence.models import ExternalTransactionModel
+
+    identity = UUID("10000000-0000-0000-0000-000000000001")
+    unsafe = '<script>alert("provider")</script>'
+    engine = create_engine(api_database)
+    try:
+        with Session(engine) as session, session.begin():
+            session.execute(
+                update(ExternalTransactionModel)
+                .where(
+                    ExternalTransactionModel.id == identity,
+                )
+                .values(description=unsafe)
+            )
+    finally:
+        engine.dispose()
+    async for client in api_client_factory(
+        UUID("11111111-1111-1111-1111-111111111111")
+    ):
+        current = await client.get("/")
+        history = await client.get("/?include_history=true")
+        detail = await client.get(f"/activity/{identity}")
+        assert "10000000-0000-0000-0000-000000000003" not in current.text
+        assert "10000000-0000-0000-0000-000000000003" in history.text
+        assert "Recorded activity" in history.text
+        for response in (current, history, detail):
+            assert response.status_code == 200
+            assert unsafe not in response.text
+            assert "&lt;script&gt;" in response.text
+
+
+def test_exact_money_and_viewport_metadata():
     from api.dashboard import money, page
 
     assert money(-105) == "-$1.05"
