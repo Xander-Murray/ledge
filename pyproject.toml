@@ -32,6 +32,9 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools]
+py-modules = ["lambda_handler"]
+
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
