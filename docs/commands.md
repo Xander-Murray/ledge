@@ -151,8 +151,9 @@ Important tables:
 - `journal_entries` and `postings`: immutable double-entry accounting history.
 - `transaction_sync_states`: one committed cursor per provider connection.
 - `provider_account_mappings`: Plaid account IDs mapped to Ledge accounts.
-- `inbox_events`: durable webhook events and processing status.
-# Demonstration commands
+- `inbound_events`: durable webhook events and processing status.
+
+## Demonstration commands
 
 Start `venv/bin/uvicorn api.app:create_app --factory` and open
 `http://127.0.0.1:8000/` for activity, purchase history and processing outcomes.
@@ -161,4 +162,15 @@ the demonstration guide. Refresh the page after running the experiment.
 
 See [demonstration.md](demonstration.md) for the current evidence workflow,
 including `ledge-plaid-sync --details` and the destructive-to-test-schema
-PostgreSQL reliability scenario. Lambda deployment is paused.
+PostgreSQL reliability scenario. Lambda code is committed; deployment awaits a
+reachable hosted database.
+
+Build the Lambda artifact on Linux x86_64 with Python 3.14:
+
+```bash
+scripts/build_lambda_package.sh
+```
+
+Output: ignored `build/ledge-lambda.zip`. The configured AWS handler will be
+`lambda_handler.handler`. This command packages code only; it creates no AWS
+resources. See `development.md` for required runtime configuration.

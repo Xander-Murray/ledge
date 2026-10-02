@@ -1,7 +1,8 @@
 # Demonstration and completion plan
 
-Lambda deployment is paused. Preserve the current worker implementation for
-later review; the immediate priority is observable financial correctness.
+The local demonstration and dashboard are implemented. Lambda runtime code is
+committed and pushed as `b141fe9`; deployment awaits hosted PostgreSQL. The
+hosting choice remains open, with low cost and minimal operations as priorities.
 
 ## Two complementary forms of evidence
 
@@ -79,8 +80,7 @@ worker took 834.360 ms. These are two local observations, not latency percentile
 or AWS measurements. The default token belonged to a different user; this run
 explicitly selected the existing dynamic token matching the configured user.
 
-1. Demonstrate the same specific pending-to-posted identity in live Sandbox output
-   and inspect its committed history. Record actual results, not invented counts.
+1. Verified: live pending-to-posted identities and committed journal history.
 2. Implemented: a thin dashboard at `/` for current activity, correction history
    and sync health. Removed/replaced rows are available through the history filter.
 3. Connect a verified Plaid notification to the worker and test that whole route.
@@ -94,6 +94,6 @@ explicitly selected the existing dynamic token matching the configured user.
 
 S3 archival, Terraform, custom observability dashboards and complex AWS networking
 are outside this completion plan. SQS is implemented; Lambda code is prepared but
-deployment is paused. Database hosting remains undecided. Do not add a service
+deployment awaits hosted PostgreSQL. Database hosting remains undecided. Do not add a service
 unless its role is necessary and explainable. No production-scale claim follows
 from passing tests or a few Sandbox refreshes.

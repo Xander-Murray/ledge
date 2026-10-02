@@ -12,7 +12,8 @@ The project currently provides a tested local vertical slice using PostgreSQL,
 FastAPI, SQLAlchemy, Alembic, and both deterministic and real Plaid Sandbox
 adapters. It can create a Sandbox Item, map supported bank accounts, ingest real
 cursor updates, and preserve each change as balanced ledger history. AWS event
-delivery is the next infrastructure milestone.
+publishing to SQS has been verified. A reusable Lambda runtime is implemented;
+deployment and queue-driven acceptance testing remain unfinished.
 
 ## Product goal
 
@@ -36,7 +37,10 @@ flowchart LR
     ledger --> reads[User-scoped read API]
 
     plaid[Plaid Sandbox] --> provider
-    sqs[SQS and Lambda - planned] -. invokes .-> worker
+    api --> sqs[SQS publishing implemented]
+    sqs -. deployment pending .-> lambda[Lambda runtime implemented]
+    lambda -. invokes .-> worker
+    reads --> dashboard[Activity and journal history dashboard]
 ```
 
 1. FastAPI accepts a normalized transaction notification and persists it before
@@ -116,7 +120,7 @@ scoped by that identity, but verified request authentication is not implemented.
 
 The current repository has:
 
-- 199 passing tests on Python 3.14
+- 245 passing tests on Python 3.14, verified 2026-10-02 against local PostgreSQL
 - Real PostgreSQL integration tests rather than SQLite substitutes
 - Nine reversible Alembic migrations with automated schema-drift detection
 - Concurrency coverage for active leases, expired claim recovery, cursor races,
@@ -214,23 +218,29 @@ The following pieces are intentionally not implemented yet:
 - Plaid Link, production institution credentials, webhook verification, and
   automatic webhook-to-worker dispatch
 - Transaction versions and stale-update ordering
-- Automatic SQS handoff and Lambda invocation
-- S3 raw-event archive, dead-letter queue, controlled replay, and CloudWatch
-  telemetry
+- Deployed Lambda invocation, queue redelivery/recovery experiments, and measured
+  cloud performance (SQS publishing and Lambda code are already implemented)
+- Controlled cloud replay and custom telemetry
 - Authentication and multi-user request identity
-- Calculated balance, recurring-charge, projection, and dashboard views
+- Calculated balance, recurring-charge, projection, and safe-to-spend views
+
+S3 archival, Terraform, a separate React frontend and complex AWS networking are
+outside the current completion scope. The activity/history dashboard is implemented.
 
 ## Current completion plan
 
-Lambda deployment is paused while we make financial correctness visible and
-reproducible. See [the demonstration guide](docs/demonstration.md) for commands,
+The local demonstration and dashboard checkpoint is complete. Lambda code was
+committed and pushed as `b141fe9`; deployment awaits a reachable hosted database.
+Database hosting has not been finalized. The preference is low cost and minimal
+operations; Neon was recommended, but no hosted project has been confirmed.
+See [the demonstration guide](docs/demonstration.md) for commands,
 asserted scenarios, evidence limits, and the revised completion criteria.
 
 Use `ledge-plaid-sync --iterations 3 --interval 10 --refresh-between --details`
 to inspect committed identities and history counts behind the provider summary.
 The CLI exercises synchronization directly, not the webhook/SQS/Lambda route.
 
-The next product milestone is a thin activity and audit dashboard. Dates and a
+The next infrastructure milestone is deployed SQS/Lambda acceptance. Dates and a
 balance baseline are prerequisites for the promised financial projections.
 S3 archival and complex AWS networking are outside the completion scope.
 
@@ -275,5 +285,7 @@ The local acceptance workflow is documented in [the demonstration guide](docs/de
   state transitions.
 - [`docs/development.md`](docs/development.md) contains environment, migration,
   testing, debugging, and repository-navigation guidance.
+- [`docs/deployment.md`](docs/deployment.md) distinguishes implemented AWS code
+  from deployed capabilities and lists the remaining verification steps.
 - [`docs/database-diagram.html`](docs/database-diagram.html) is a rendered visual
   map of the codebase, schema, tests, and roadmap.

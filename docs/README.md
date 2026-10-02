@@ -12,12 +12,12 @@ is Lambda deployment and an acceptance run through SQS. Authentication,
 balances and projections remain unfinished.
 
 Read [demonstration.md](demonstration.md) for the active completion plan and
-repeatable evidence commands. Lambda deployment is paused. SQS publishing and a
-prepared Lambda runtime exist; the earlier AWS-first sequencing below is historical.
-The focus is visible transaction lifecycles, rollback/retry evidence and a thin
-dashboard. Older test counts are recorded checkpoints, not current totals.
+repeatable evidence commands. SQS publishing is implemented and verified; the
+Lambda runtime is committed as `b141fe9`. Deployment awaits hosted PostgreSQL.
+Hosting remains undecided; no Neon or RDS database has been confirmed.
+The dashboard and connected local Sandbox exercise are implemented and verified.
 
-## Earlier checkpoint
+## Current checkpoint
 
 The local vertical slice currently includes:
 
@@ -31,10 +31,10 @@ normalized webhook intake
   -> user-scoped FastAPI reads
 ```
 
-The current checkpoint has 199 passing tests and nine reversible Alembic
+The current checkpoint has 245 passing tests (verified 2026-10-02) and nine reversible Alembic
 migrations. A real Plaid Sandbox Item has been created and synchronized through
 the same application boundary used by deterministic tests. The next major
-milestone is AWS delivery through SQS and Lambda, followed by durable operational
+milestone is deployed SQS/Lambda acceptance, followed by repeatable operational
 measurements.
 
 A recorded local dynamic-Sandbox run imported 125 transactions as 125 journals
@@ -57,6 +57,10 @@ evidence, not production benchmarks.
    relational schema, test layers, and roadmap.
 7. `commands.md` is the practical command reference for local setup, Sandbox
    synchronization, tests, the API, and PostgreSQL inspection.
+8. `demonstration.md` distinguishes real Sandbox integration from controlled
+   failure experiments and records the remaining completion work.
+9. `deployment.md` records the implemented AWS contracts, required configuration,
+   hosting decision and remaining deployment verification.
 
 ## Source of truth
 

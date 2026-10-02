@@ -19,7 +19,8 @@ PostgreSQL persistence, migrations, deterministic synchronization, FastAPI read
 models, durable notification intake, and a leased event processor. It now also
 creates a real Plaid Sandbox Item, imports supported accounts, persists provider
 mappings, and translates `/transactions/sync` responses through the same
-provider-neutral application service. AWS delivery is the next major milestone.
+provider-neutral application service. SQS publishing is implemented and verified.
+Lambda composition is implemented; deployed acceptance is the next milestone.
 
 ## Current checkpoint non-goals
 
@@ -32,30 +33,30 @@ provider-neutral application service. AWS delivery is the next major milestone.
 
 ## Current direction
 
-The active [completion plan](demonstration.md) prioritizes observable local
-correctness and a thin dashboard. Lambda deployment is paused; database hosting
-is undecided. S3 archival and complex AWS networking are outside the scope.
-The diagram below records the earlier design, not required completion work.
+The active [completion plan](demonstration.md) includes the implemented local
+acceptance exercise and server-rendered dashboard. Lambda deployment awaits a
+hosted database; hosting is undecided. S3 archival and complex AWS networking
+are outside the scope. A separate React service is unnecessary.
 
-## Earlier target architecture
+## Current architecture and remaining deployment
 
 ```text
 Plaid Sandbox webhook
         |
         v
-FastAPI receiver ----> immutable S3 event archive
+FastAPI receiver ----> durable PostgreSQL inbox
         |
         v
-       SQS ----failures----> DLQ ----> authenticated replay
+       SQS (publisher verified; deployed consumption pending)
         |
         v
-Lambda sync worker ----> provider /transactions/sync
+Lambda runtime (implemented, not deployed) ----> provider /transactions/sync
         |
         v
 PostgreSQL ledger and read models
         |
         v
-FastAPI queries ----> React dashboard
+FastAPI queries ----> server-rendered activity/history dashboard (implemented)
 ```
 
 ## Current Phase 1 path
@@ -93,7 +94,8 @@ The implemented repository persists additions, modifications, removals, and
 pending-to-posted replacements without making the domain depend on SQLAlchemy.
 It keeps the current provider projection in `external_transactions` and appends
 balanced, sealed history to `journal_entries` and `postings`. Plaid Sandbox now
-drives this path with actual provider responses; AWS and React remain later phases.
+drives this path with actual provider responses. The FastAPI dashboard renders
+committed state; AWS worker deployment remains the next infrastructure phase.
 
 ## Current provider boundary
 
@@ -262,8 +264,13 @@ The inbox stores processing start and finish timestamps, attempt count, and a
 bounded failure category rather than raw exception text. Those fields support
 measured processing latency, retry rate, first-attempt success rate, abandoned
 work recovery, and failure counts without storing potentially sensitive error
-messages. SQS delivery, a Lambda handler, and CloudWatch emission are not wired
-yet.
+messages. FastAPI publishes pending/failed event IDs to SQS after the inbox
+commit when `LEDGE_EVENT_QUEUE_URL` is configured. Publishing failure returns
+503 while preserving the event for retry. Processed events are not republished.
+The implemented Lambda handler uses partial batch failures and reuses its engine
+and HTTP client across warm invocations. It loads Plaid credentials from Secrets
+Manager and invokes the same processor. It is not deployed; CloudWatch metrics
+and queue-driven recovery have not been verified.
 
 ## Current HTTP boundary
 

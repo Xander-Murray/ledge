@@ -95,8 +95,22 @@ Run coverage:
 venv/bin/pytest --cov=src --cov-report=term-missing
 ```
 
-Current verified checkpoint: 199 tests pass. Run the full suite and coverage
+Current verified checkpoint: 245 tests passed on Python 3.14 against local
+PostgreSQL on 2026-10-02 in 49.78 seconds. Coverage has not been freshly measured.
+Run the full suite and coverage
 command immediately before publishing updated test or coverage figures.
+
+The Lambda entrypoint is `lambda_handler.handler`. Build its zip with
+`scripts/build_lambda_package.sh` on Linux x86_64 using Python 3.14.
+The ignored output is `build/ledge-lambda.zip`; configure the deployed function
+for the matching Python runtime and architecture. Building a zip does not
+deploy the worker. The builder downloads dependencies within declared version
+ranges, so it is not a dependency-locked reproducible artifact.
+
+Lambda loads `LEDGE_PLAID_SECRET_ID` from Secrets Manager. Its JSON must contain
+exactly `client_id`, `secret`, `access_token`, and `item_id`, all nonempty strings.
+It also requires `LEDGE_DATABASE_URL` and `LEDGE_USER_ID`. Keep credentials out
+of tracked files. Hosted database credential storage remains deployment work.
 
 ## Static checks
 

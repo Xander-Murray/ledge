@@ -323,11 +323,10 @@ your Markdown renderer does not already include it.</p>
     end
 
     %% Cloud components come after local sync semantics are proven.
-    subgraph cloud[Future AWS delivery]
+    subgraph cloud[AWS delivery - deployment incomplete]
         receiver[Webhook receiver on EC2]:::future
-        s3[S3 raw-event archive]:::future
-        sqs[SQS and DLQ]:::future
-        lambda[Lambda sync worker]:::future
+        sqs[SQS publishing verified]:::done
+        lambda[Lambda runtime implemented - not deployed]:::future
     end
 
     fixture --&gt; fake
@@ -363,7 +362,6 @@ your Markdown renderer does not already include it.</p>
     accounts --&gt; orm
     transactions --&gt; orm
     sync_status --&gt; orm
-    receiver --&gt; s3
     receiver --&gt; sqs
     sqs --&gt; lambda
     lambda --&gt; sync
@@ -742,7 +740,7 @@ existing database reaches it.</p>
 
     classDef active fill:#fff0bf,stroke:#9a6b00,color:#4d3500
     classDef next fill:#dcecff,stroke:#316aa3,color:#163957</code></pre>
-<p>Current checkpoint: 199 tests pass. Persistence, application, and API
+<p>Current checkpoint: 245 tests passed on 2026-10-02. Persistence, application, and API
 integration tests migrate a real <code>ledge_test</code> database down
 to base and back to head rather than substituting SQLite for PostgreSQL
 behavior.</p>
@@ -761,9 +759,9 @@ polling; they are not production benchmarks.</p>
 <h2 id="what-exists-versus-what-comes-next">What exists versus what
 comes next</h2>
 <pre class="mermaid"><code>flowchart LR
-    current[Current checkpoint&lt;br/&gt;real Plaid Sandbox to PostgreSQL ledger]:::active
-    aws[Next&lt;br/&gt;S3, SQS, Lambda, EC2, RDS]:::next
-    reads[Later&lt;br/&gt;consumer read models and dashboard]:::future
+    current[Current&lt;br/&gt;Sandbox acceptance and activity/history dashboard]:::active
+    aws[Next&lt;br/&gt;hosted PostgreSQL and SQS/Lambda acceptance]:::next
+    reads[Later&lt;br/&gt;dates, balance baseline and financial projections]:::future
 
     current --&gt; aws --&gt; reads
 
@@ -778,8 +776,10 @@ advancement roll back. FastAPI now reads user-scoped resources and
 durably accepts duplicate-safe notifications. The leased processor
 retries those notifications without holding a database claim open across
 provider work and fences stale workers. A real Plaid Sandbox adapter and
-account bootstrap now drive the same synchronizer. SQS and Lambda are
-the next delivery boundary and will invoke the proven processor.</p>
+account bootstrap now drive the same synchronizer. SQS publishing is verified;
+the committed Lambda runtime invokes the same processor, but deployment awaits
+hosted PostgreSQL. Hosting remains undecided. The dashboard is server-rendered
+by FastAPI. S3 archival and a separate React frontend are outside scope.</p>
 <h2 id="quick-directory-guide">Quick directory guide</h2>
 <pre class="text"><code>src/
 |-- application/     account bootstrap, synchronization, and event processing

@@ -107,7 +107,9 @@ row, so it cannot overwrite the reclaiming worker's result.
 The provider call and synchronization do not run inside the inbox claim
 transaction. This keeps the database row lock and connection short-lived while
 still making ownership durable across a crash. SQS does not invoke this processor
-yet; current integration tests call it directly.
+in a deployed environment yet. The committed Lambda adapter invokes the same
+processor; local acceptance calls it after sending duplicate notifications
+through HTTP. Cloud queue redelivery remains a separate verification milestone.
 
 ### Failure after the first change in a sync page
 
